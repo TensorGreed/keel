@@ -4,6 +4,7 @@
  *
  *   keel [serve]   start the MCP server over stdio (default) — see serve.ts
  *   keel init      register keel in a project's .mcp.json      — see init.ts
+ *   keel ingest    backfill GitHub PRs into the event log      — see github/cli.ts
  *
  * Subcommand modules are imported lazily so `keel init` doesn't spin up the MCP SDK,
  * SQLite, or commit ingestion.
@@ -15,6 +16,7 @@ const HELP = `keel — development intelligence layer, delivered as an MCP serve
 Usage:
   keel [serve]   start the MCP server over stdio (default)
   keel init      register keel in this project's .mcp.json
+  keel ingest    backfill GitHub PRs + review threads into the event log
   keel --help    show this help
   keel --version print the version
 
@@ -38,6 +40,11 @@ switch (command) {
   case "init": {
     const { runInit } = await import("./init.js");
     process.exit(runInit(rest));
+    break;
+  }
+  case "ingest": {
+    const { runIngest } = await import("./github/cli.js");
+    process.exit(await runIngest(rest));
     break;
   }
   case "-h":

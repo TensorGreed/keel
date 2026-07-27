@@ -46,7 +46,7 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          CLI entry: dispatches `keel serve` (default) and `keel init`
+  index.ts          CLI entry: dispatches `keel serve` (default), `init`, `ingest`
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
@@ -57,6 +57,8 @@ src/
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests),
                     preflight.ts (impact -> select -> sandbox, budgeted)
+  github/           `keel ingest`: backfill PRs + review threads into the event log
+                    (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/

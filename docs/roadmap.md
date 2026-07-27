@@ -34,7 +34,7 @@ Goal: `preflight(diff)` returns **executed** results, single repo, TS/JS.
 Goal: `why(path)` answers with mined decision records and receipts.
 **Demo:** "why is this like this?" → actual PR thread, author, incident links.
 
-- [ ] GitHub connector: backfill PRs + review threads into the event log
+- [x] GitHub connector: backfill PRs + review threads into the event log
 - [ ] Decision miner: local model (Ollama) or batch Haiku; prompt + eval fixture set
 - [ ] Decision records linked to graph nodes; embeddings for retrieval (local model)
 - [ ] `why` MCP tool with source links; pin/correct mechanism (human override wins)
