@@ -214,3 +214,37 @@ describe("git-keyed graph cache", () => {
     }
   });
 });
+
+describe("incremental rescan over an import cycle", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    resetGraphCache();
+  });
+  afterEach(() => {
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("updates a cyclic graph incrementally and still excludes each file from itself", async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-cycle-"));
+    git(dir, ["init", "-b", "main"]);
+    write(dir, ".gitignore", ".keel/\n");
+    write(dir, "a.ts", 'import { b } from "./b.js";\nexport const a = () => b() + 1;\n');
+    write(dir, "b.ts", 'import { a } from "./a.js";\nexport const b = () => (a ? 1 : 0);\n');
+    commitAll(dir, "cycle");
+
+    await loadGraph(dir); // rebuild + persist the cyclic graph at HEAD
+
+    // Modify only a.ts's body -> the incremental path rescans it over the cycle.
+    write(dir, "a.ts", 'import { b } from "./b.js";\nexport const a = () => b() + 2;\n');
+    commitAll(dir, "tweak a");
+    resetGraphCache();
+
+    const load = await loadGraph(dir);
+    expect(load.source).toBe("incremental");
+    // The cycle must not make a file its own transitive dependent, and must terminate.
+    expect(reportFor(load.graph, "a.ts").transitiveDependents).toEqual(["b.ts"]);
+    expect(reportFor(load.graph, "b.ts").transitiveDependents).toEqual(["a.ts"]);
+    await assertMatchesFullBuild(dir);
+  }, 10_000);
+});
