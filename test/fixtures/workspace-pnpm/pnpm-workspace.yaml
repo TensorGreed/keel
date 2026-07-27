@@ -1,0 +1,3 @@
+# comment to exercise the parser
+packages:
+  - "packages/*"

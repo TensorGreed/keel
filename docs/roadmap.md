@@ -11,7 +11,7 @@ about any TS/JS repo. **Demo:** graph-backed answers on a fresh public repo.
 - [x] Repo scaffold: TS strict, ESM, vitest, MCP stdio server
 - [x] `get_dependencies` v0: file-level import graph via TS compiler API
 - [x] `get_history` v0: git log for a path via child_process
-- [ ] Resolve tsconfig path aliases + monorepo workspaces in the graph
+- [x] Resolve tsconfig path aliases + monorepo workspaces in the graph
 - [ ] Symbol-level dependencies: which exports of a file each dependent actually uses
 - [ ] Event log v1: SQLite persistence via `node:sqlite`, commits ingested on startup
 - [ ] `keel init` UX: one command that registers the server in `.mcp.json`
