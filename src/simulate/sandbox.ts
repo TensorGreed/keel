@@ -276,13 +276,18 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
 
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "keel-sandbox-"));
   const worktree = path.join(parent, "wt");
-  const cleanup = (): void => {
-    void git(repoRoot, ["worktree", "remove", "--force", worktree]);
+  // Tear down in order and awaited: remove the worktree (registration + dir), then rmSync
+  // the parent as a fallback, then always prune so a failed remove can't leave a stale
+  // entry in the main repo's .git/worktrees. Racing rmSync against a fire-and-forget remove
+  // would let cleanup finish after the caller returns and orphan the registration.
+  const cleanup = async (): Promise<void> => {
+    await git(repoRoot, ["worktree", "remove", "--force", worktree]);
     try {
       fs.rmSync(parent, { recursive: true, force: true });
     } catch {
       /* ignore */
     }
+    await git(repoRoot, ["worktree", "prune"]);
   };
 
   try {
@@ -337,6 +342,6 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
       ...(capped ? { capped } : {}),
     });
   } finally {
-    cleanup();
+    await cleanup();
   }
 }

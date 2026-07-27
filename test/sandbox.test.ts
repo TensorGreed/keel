@@ -84,9 +84,13 @@ describe("sandbox runner", () => {
   it("leaves the main working tree untouched after a run", async () => {
     await runSandbox(dir, { diff: BREAKING_DIFF, testFiles: ["sum.test.js"] });
     expect(fs.readFileSync(path.join(dir, "sum.js"), "utf8")).toBe("exports.sum = (a, b) => a + b;\n");
-    // no leftover worktrees registered
-    const list = execFileSync("git", ["worktree", "list"], { cwd: dir }).toString();
-    expect(list).not.toContain("keel-sandbox");
+    // Cleanup is fully awaited: exactly one worktree (the main one), and no stale/prunable
+    // registration left behind in .git/worktrees.
+    const porcelain = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: dir }).toString();
+    const entries = porcelain.trim().split(/\n\n+/).filter((e) => e.trim().length > 0);
+    expect(entries).toHaveLength(1);
+    expect(porcelain).not.toContain("prunable");
+    expect(porcelain).not.toContain("keel-sandbox");
   }, 30_000);
 
   it("reproduces uncommitted working-tree changes when no diff is given", async () => {
