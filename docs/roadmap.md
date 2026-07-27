@@ -22,7 +22,7 @@ about any TS/JS repo. **Demo:** graph-backed answers on a fresh public repo.
 Goal: `preflight(diff)` returns **executed** results, single repo, TS/JS.
 **Demo:** "what happens if I rename this field?" answered with real failures in <2 min.
 
-- [ ] Diff → impacted-subgraph mapping (files v0, symbols v1)
+- [x] Diff → impacted-subgraph mapping (files v0, symbols v1)
 - [ ] Test selection: map test files to the source files they cover (imports v0)
 - [ ] Sandbox runner: apply diff in a temp git worktree, run selected tests (vitest/jest)
 - [ ] Budget caps: max tests, max wall time; caps always reported in output

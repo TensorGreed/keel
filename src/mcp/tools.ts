@@ -8,6 +8,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { reportFor } from "../graph/dependencies.js";
 import { loadGraph } from "../graph/cache.js";
+import { getImpact } from "../simulate/impact.js";
 import { historyFor } from "../git/history.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -43,6 +44,25 @@ export function registerTools(server: McpServer, repoRoot: string): void {
         });
       } catch (err) {
         return json({ error: `get_dependencies failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
+    "get_impact",
+    "Map a change to its impacted subgraph: given a unified diff (or, if omitted, the " +
+      "working tree's uncommitted changes vs HEAD), return the changed files and touched " +
+      "exported symbols, the file-level blast radius (impactedFiles), a symbol-narrowed " +
+      "subset (impactedNarrowed — a dependent is dropped only when the change provably " +
+      "can't reach an export it uses), and the shortest dependency path from each impacted " +
+      "file back to a changed one. Deterministic static analysis over the graph — the " +
+      "scoping step before test selection. Renames/deletes/new files handled explicitly.",
+    { diff: z.string().optional().describe("Unified diff; omit to use uncommitted working-tree changes") },
+    async ({ diff }) => {
+      try {
+        return json(await getImpact(repoRoot, diff !== undefined ? { diff } : {}));
+      } catch (err) {
+        return json({ error: `get_impact failed: ${(err as Error).message}` });
       }
     },
   );

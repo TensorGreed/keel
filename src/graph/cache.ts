@@ -74,6 +74,29 @@ export async function loadGraph(repoRoot: string): Promise<GraphLoad> {
   return load;
 }
 
+/**
+ * The graph of commit HEAD, ignoring working-tree changes — the *baseline* a diff applies
+ * to. Impact analysis needs this so a file deleted or modified in the working tree still
+ * shows the dependents it had before the change. Uses the on-disk cache when it sits at
+ * HEAD (the common "I have uncommitted edits" case); otherwise falls back to the current
+ * graph, which equals HEAD when the tree is clean.
+ */
+export async function loadHeadGraph(repoRoot: string): Promise<{ graph: FileGraph; head: string | null }> {
+  const root = path.resolve(repoRoot);
+  const head = await gitHead(root);
+  if (head !== null) {
+    const cached = readDiskCache(root);
+    if (cached && cached.head === head) return { graph: cached.graph, head };
+  }
+  const load = await loadGraph(root);
+  return { graph: load.graph, head };
+}
+
+/** Read the contents of a path at commit HEAD (the pre-change baseline), or null. */
+export async function gitShowHead(repoRoot: string, relPosixPath: string): Promise<string | null> {
+  return git(path.resolve(repoRoot), ["show", `HEAD:${relPosixPath}`]);
+}
+
 async function computeGraph(root: string, head: string | null, dirty: Set<string> | null): Promise<GraphLoad> {
   // Without git we can't detect change precisely, so always rebuild (correct, just not cached).
   if (head === null || dirty === null) {
