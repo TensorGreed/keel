@@ -1,0 +1,27 @@
+{
+  "name": "keel",
+  "version": "0.0.1",
+  "description": "Development intelligence layer: your codebase, with memory and foresight. MCP server for coding agents.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "keel": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc && node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "typescript": "^5.5.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "vitest": "^3.0.0"
+  }
+}
