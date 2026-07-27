@@ -50,12 +50,13 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
-                    select_tests, get_history)
+                    select_tests, preflight, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
-                    sandbox.ts (apply diff in a temp worktree, run the tests)
+                    sandbox.ts (apply diff in a temp worktree, run the tests),
+                    preflight.ts (impact -> select -> sandbox, budgeted)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
@@ -78,5 +79,10 @@ TS compiler API (with tsconfig path aliases, workspace resolution, and symbol-le
 usage), served from an incremental graph cache keyed by git HEAD (`graph/cache.ts`);
 `get_history` shells out to git log. The event log persists to SQLite (`SqliteEventStore`,
 node:sqlite) and ingests commits on startup. `keel init` registers the server in
-`.mcp.json`. Next up is Phase 1 (flight simulator) — see `docs/roadmap.md` and pick up the
-first unchecked item.
+`.mcp.json`.
+
+Phase 1 (flight simulator) is essentially built: `get_impact` maps a diff to its impacted
+subgraph (symbol-narrowed, with an intra-file reference closure), `select_tests` picks the
+covering tests, `sandbox.ts` runs them in an isolated worktree, and `preflight` ties it all
+together into executed, budget-capped results. Remaining Phase 1 polish and Phase 2 (team
+memory) are the next work — see `docs/roadmap.md` and pick up the first unchecked item.

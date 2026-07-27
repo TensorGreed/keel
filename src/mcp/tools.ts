@@ -10,6 +10,7 @@ import { reportFor } from "../graph/dependencies.js";
 import { loadGraph, loadHeadGraph } from "../graph/cache.js";
 import { getImpact } from "../simulate/impact.js";
 import { changedRoots, selectTests } from "../simulate/select-tests.js";
+import { preflight } from "../simulate/preflight.js";
 import { historyFor } from "../git/history.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -85,6 +86,36 @@ export function registerTools(server: McpServer, repoRoot: string): void {
         return json(selectTests(graph, changedRoots(impact.changedFiles)));
       } catch (err) {
         return json({ error: `select_tests failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
+    "preflight",
+    "Flight-simulate a change: map a unified diff (or, if omitted, the working tree's " +
+      "uncommitted changes) to its impacted files, select the covering tests, apply the " +
+      "diff in an isolated git worktree, and run those tests — returning EXECUTED results, " +
+      "not predictions. Output: { impacted, testsSelected, uncoveredChanges, executed " +
+      "{ status, passed, failed, failures[{ test, file, message, graphPath }] }, budget }. " +
+      "Hard-capped by maxTests (default 50) and maxSeconds (default 120), always reported; " +
+      "over the cap, tests nearest the change run first. Errors (bad diff, apply-failed, " +
+      "timeout) come back as data in status, never thrown.",
+    {
+      diff: z.string().optional().describe("Unified diff; omit to use uncommitted working-tree changes"),
+      maxTests: z.number().int().min(0).optional().describe("Max test files to run (default 50 / KEEL_MAX_TESTS)"),
+      maxSeconds: z.number().int().min(1).optional().describe("Wall-time cap in seconds (default 120 / KEEL_MAX_SECONDS)"),
+    },
+    async ({ diff, maxTests, maxSeconds }) => {
+      try {
+        return json(
+          await preflight(repoRoot, {
+            ...(diff !== undefined ? { diff } : {}),
+            ...(maxTests !== undefined ? { maxTests } : {}),
+            ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+          }),
+        );
+      } catch (err) {
+        return json({ error: `preflight failed: ${(err as Error).message}` });
       }
     },
   );

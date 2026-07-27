@@ -25,8 +25,8 @@ Goal: `preflight(diff)` returns **executed** results, single repo, TS/JS.
 - [x] Diff → impacted-subgraph mapping (files v0, symbols v1)
 - [x] Test selection: map test files to the source files they cover (imports v0)
 - [x] Sandbox runner: apply diff in a temp git worktree, run selected tests (vitest/jest)
-- [ ] Budget caps: max tests, max wall time; caps always reported in output
-- [ ] `preflight` MCP tool: { impacted, testsSelected, executed, failures[] }
+- [x] Budget caps: max tests, max wall time; caps always reported in output
+- [x] `preflight` MCP tool: { impacted, testsSelected, executed, failures[] }
 - [ ] Failure report: trace + the graph path from change to failure
 
 ## Phase 2 — Team memory
