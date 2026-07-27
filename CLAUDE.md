@@ -53,8 +53,9 @@ src/
                     select_tests, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
-  simulate/         Flight simulator scoping: impact.ts (diff -> impacted subgraph),
-                    select-tests.ts (impacted -> covering test files)
+  simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
+                    select-tests.ts (impacted -> covering test files),
+                    sandbox.ts (apply diff in a temp worktree, run the tests)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
