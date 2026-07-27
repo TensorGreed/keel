@@ -9,6 +9,7 @@ export type EventKind =
   | "commit"
   | "pr"
   | "review_comment"
+  | "decision"
   | "ci_run"
   | "deploy"
   | "incident"

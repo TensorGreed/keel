@@ -1,0 +1,24 @@
+{
+  "name": "trivial change carries no decision",
+  "pr": {
+    "number": 7,
+    "title": "Fix typo in README",
+    "body": "s/teh/the/",
+    "author": "erin",
+    "state": "closed",
+    "merged": true,
+    "url": "https://github.com/o/r/pull/7",
+    "files": ["README.md"],
+    "reviews": []
+  },
+  "comments": [],
+  "modelOutput": "{\"hasDecision\": false, \"summary\": \"\", \"rationale\": \"\", \"alternatives\": [], \"files\": [], \"confidence\": \"low\"}",
+  "gold": {
+    "hasDecision": false,
+    "summary": "",
+    "rationale": "",
+    "alternatives": [],
+    "files": [],
+    "confidence": "low"
+  }
+}

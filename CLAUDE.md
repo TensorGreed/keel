@@ -59,6 +59,9 @@ src/
                     preflight.ts (impact -> select -> sandbox, budgeted)
   github/           `keel ingest`: backfill PRs + review threads into the event log
                     (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps)
+  mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
+                    The one place model calls are allowed — Ollama or batch Haiku,
+                    injectable DecisionModel; never reached from the MCP server
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/

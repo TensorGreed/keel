@@ -35,7 +35,7 @@ Goal: `why(path)` answers with mined decision records and receipts.
 **Demo:** "why is this like this?" → actual PR thread, author, incident links.
 
 - [x] GitHub connector: backfill PRs + review threads into the event log
-- [ ] Decision miner: local model (Ollama) or batch Haiku; prompt + eval fixture set
+- [x] Decision miner: local model (Ollama) or batch Haiku; prompt + eval fixture set
 - [ ] Decision records linked to graph nodes; embeddings for retrieval (local model)
 - [ ] `why` MCP tool with source links; pin/correct mechanism (human override wins)
 - [ ] Incremental mining on new PRs (cost target: <$0.25/day for 50 PRs)

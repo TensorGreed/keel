@@ -1,0 +1,43 @@
+{
+  "name": "clear decision with an alternative",
+  "pr": {
+    "number": 2,
+    "title": "Persist the event log in SQLite",
+    "body": "Move the event store from an in-memory stub to SQLite so the timeline survives restarts. Using node:sqlite to avoid native/npm deps.",
+    "author": "alice",
+    "state": "closed",
+    "merged": true,
+    "url": "https://github.com/o/r/pull/2",
+    "files": ["src/events/store.ts", "src/events/sqlite-store.ts"],
+    "reviews": [{ "author": "bob", "state": "APPROVED", "body": "Makes sense, LGTM" }]
+  },
+  "comments": [
+    {
+      "id": 10,
+      "prNumber": 2,
+      "inReplyTo": null,
+      "path": "src/events/sqlite-store.ts",
+      "diffHunk": "@@ import { DatabaseSync } from \"node:sqlite\"",
+      "body": "Why node:sqlite over better-sqlite3?",
+      "author": "bob"
+    },
+    {
+      "id": 11,
+      "prNumber": 2,
+      "inReplyTo": 10,
+      "path": "src/events/sqlite-store.ts",
+      "diffHunk": "@@ import { DatabaseSync } from \"node:sqlite\"",
+      "body": "better-sqlite3 is a native dep; node:sqlite keeps install friction near zero.",
+      "author": "alice"
+    }
+  ],
+  "modelOutput": "Here is the extracted decision:\n```json\n{\"hasDecision\": true, \"summary\": \"Persist the event log with node:sqlite instead of a native dependency\", \"rationale\": \"better-sqlite3 is a native dependency; node:sqlite keeps install friction near zero\", \"alternatives\": [\"better-sqlite3\"], \"files\": [\"src/events/sqlite-store.ts\"], \"confidence\": \"high\"}\n```",
+  "gold": {
+    "hasDecision": true,
+    "summary": "Persist the event log with node:sqlite instead of a native dependency",
+    "rationale": "better-sqlite3 is a native dependency; node:sqlite keeps install friction near zero",
+    "alternatives": ["better-sqlite3"],
+    "files": ["src/events/sqlite-store.ts"],
+    "confidence": "high"
+  }
+}
