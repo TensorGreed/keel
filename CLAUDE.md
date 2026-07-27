@@ -46,11 +46,13 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          MCP server entry: registers tools, stdio transport
+  index.ts          CLI entry: dispatches `keel serve` (default) and `keel init`
+  serve.ts          Starts the MCP server over stdio; ingests commits first
+  init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API)
-  git/              Git history access (child_process, no deps)
-  events/           Event log: schema.sql + store interface (Phase 0: stub)
+  git/              Git history + commit listing (child_process, no deps)
+  events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
 ```
 
@@ -66,7 +68,9 @@ test/               Vitest; fixtures under test/fixtures/
 
 ## Where we are
 
-Phase 0 (substrate skeleton) is scaffolded: both MCP tools work at v0 quality —
-`get_dependencies` walks import edges via the TS compiler API, `get_history` shells out
-to git log. The event store is a stub. See `docs/roadmap.md` for the ordered task list;
-pick up the first unchecked item.
+Phase 0 (substrate skeleton) is well underway. `get_dependencies` walks import edges via
+the TS compiler API (with tsconfig path aliases, workspace resolution, and symbol-level
+usage); `get_history` shells out to git log. The event log persists to SQLite
+(`SqliteEventStore`, node:sqlite) and ingests commits on startup. `keel init` registers
+the server in `.mcp.json`. See `docs/roadmap.md` for the ordered task list; pick up the
+first unchecked item.

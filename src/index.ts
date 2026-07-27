@@ -1,47 +1,62 @@
 #!/usr/bin/env node
 /**
- * Keel — development intelligence layer, delivered as an MCP server over stdio.
+ * Keel CLI entry + command dispatch.
  *
- * Usage: KEEL_REPO=/path/to/repo keel        (defaults to cwd)
+ *   keel [serve]   start the MCP server over stdio (default) — see serve.ts
+ *   keel init      register keel in a project's .mcp.json      — see init.ts
  *
- * Register in a project's .mcp.json:
- *   { "mcpServers": { "keel": { "command": "keel", "env": { "KEEL_REPO": "." } } } }
+ * Subcommand modules are imported lazily so `keel init` doesn't spin up the MCP SDK,
+ * SQLite, or commit ingestion.
  */
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { registerTools } from "./mcp/tools.js";
-import { SqliteEventStore } from "./events/sqlite-store.js";
-import { ingestCommits } from "./events/ingest.js";
+import { readFileSync } from "node:fs";
 
-const repoRoot = path.resolve(process.env["KEEL_REPO"] ?? process.cwd());
+const HELP = `keel — development intelligence layer, delivered as an MCP server
 
-if (!fs.existsSync(path.join(repoRoot, ".git"))) {
-  // Not fatal — get_dependencies still works — but say so on stderr (stdout is protocol).
-  console.error(`[keel] warning: ${repoRoot} is not a git repo; get_history will fail`);
+Usage:
+  keel [serve]   start the MCP server over stdio (default)
+  keel init      register keel in this project's .mcp.json
+  keel --help    show this help
+  keel --version print the version
+
+serve reads the target repo from KEEL_REPO (defaults to the current directory).`;
+
+function readVersion(): string {
+  try {
+    // dist/index.js -> ../package.json; same layout in the published package.
+    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? "0.0.0";
+  } catch {
+    return "0.0.0";
+  }
 }
 
-// Substrate: persist the event log and ingest commits before serving. The store isn't
-// wired into a tool yet — Phase 1 simulation and Phase 2 PR events write into it — but
-// ingestion runs now so the timeline is populated. Failures here are non-fatal: the
-// graph/history tools work without it.
-const store = new SqliteEventStore(path.join(repoRoot, ".keel", "events.db"));
-try {
-  await ingestCommits(store, repoRoot);
-} catch (err) {
-  console.error(`[keel] commit ingestion failed: ${(err as Error).message}`);
-}
-for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => {
-    store.close();
-    process.exit(0);
-  });
-}
+const [command, ...rest] = process.argv.slice(2);
 
-const server = new McpServer({ name: "keel", version: "0.0.1" });
-registerTools(server, repoRoot);
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
-console.error(`[keel] serving ${repoRoot} over stdio`);
+switch (command) {
+  case "init": {
+    const { runInit } = await import("./init.js");
+    process.exit(runInit(rest));
+    break;
+  }
+  case "-h":
+  case "--help":
+  case "help":
+    console.log(HELP);
+    break;
+  case "-v":
+  case "--version":
+    console.log(readVersion());
+    break;
+  case undefined:
+  case "serve": {
+    const { serve } = await import("./serve.js");
+    await serve();
+    break;
+  }
+  default:
+    console.error(`[keel] unknown command: ${command}\n`);
+    console.error(HELP);
+    process.exit(1);
+}
