@@ -168,6 +168,20 @@ rename to helper2.ts
     expect(selection.tests.map((t) => t.file)).toEqual(["__tests__/deep.test.ts"]);
   });
 
+  it("rejects a non-applying diff up front (same validation as preflight)", async () => {
+    // select_tests routes through getImpact, so it rejects exactly what git apply would.
+    const diff = `diff --git a/lib.ts b/lib.ts
+--- a/lib.ts
++++ b/lib.ts
+@@ -1 +1 @@
+-export const nonexistent = 0;
++export const nonexistent = 1;
+`;
+    const impact = await getImpact(dir, { diff });
+    expect("error" in impact).toBe(true);
+    if ("error" in impact) expect(impact.error).toContain("does not apply");
+  });
+
   it("uses working-tree changes when no diff is given", async () => {
     resetGraphCache();
     await loadGraph(dir); // warm the baseline

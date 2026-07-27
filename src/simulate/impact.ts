@@ -573,6 +573,26 @@ async function git(repoRoot: string, args: string[]): Promise<string | null> {
   }
 }
 
+/**
+ * Validate an explicit diff with the same `git apply` the sandbox runs, so analysis and
+ * execution can't disagree about whether a diff applies. Returns git's stderr on failure,
+ * or null if the diff applies cleanly. get_impact/select_tests/preflight all reach this
+ * through getImpact, so all three reject the same diffs preflight would.
+ */
+function assertDiffApplies(repoRoot: string, diff: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const child = execFile(
+      "git",
+      ["apply", "--check", "--whitespace=nowarn", "-"],
+      { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 },
+      (error, _stdout, stderr) => {
+        resolve(error ? String(stderr).trim() || error.message : null);
+      },
+    );
+    child.stdin?.end(diff.endsWith("\n") ? diff : diff + "\n");
+  });
+}
+
 /** The propagating baseline node for a changed file, plus the exports it changed. Returns
  *  null when the change doesn't propagate (a new file, or a non-source file). */
 async function analyzeChange(
@@ -617,6 +637,10 @@ export async function getImpact(
   const fromDiffString = options.diff !== undefined;
   try {
     if (fromDiffString) {
+      // Reject up front anything the sandbox's git apply would reject — no working-tree
+      // check is needed in the else branch, where the change already IS the working tree.
+      const applyError = await assertDiffApplies(repoRoot, options.diff!);
+      if (applyError !== null) return { error: `diff does not apply: ${applyError}` };
       fileDiffs = parseUnifiedDiff(options.diff!);
     } else {
       const { head } = await loadHeadGraph(repoRoot);

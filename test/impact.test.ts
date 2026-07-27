@@ -76,13 +76,11 @@ describe("diff -> impacted subgraph", () => {
     const diff = `diff --git a/lib.ts b/lib.ts
 --- a/lib.ts
 +++ b/lib.ts
-@@ -1,6 +1,6 @@
+@@ -1,3 +1,3 @@
  export function alpha() {
 -  return 1;
 +  return 10;
  }
- export function beta() {
-   return 2;
 `;
     const result = ok(await getImpact(dir, { diff }));
     expect(result.changedSymbols["lib.ts"]).toEqual(["alpha"]);
@@ -97,10 +95,7 @@ describe("diff -> impacted subgraph", () => {
     const diff = `diff --git a/lib.ts b/lib.ts
 --- a/lib.ts
 +++ b/lib.ts
-@@ -1,6 +1,6 @@
- export function alpha() {
-   return 1;
- }
+@@ -4,3 +4,3 @@
  export function beta() {
 -  return 2;
 +  return 20;
@@ -116,13 +111,11 @@ describe("diff -> impacted subgraph", () => {
     const diff = `diff --git a/helper.ts b/helper.ts
 --- a/helper.ts
 +++ b/helper.ts
-@@ -1,6 +1,6 @@
+@@ -1,3 +1,3 @@
  function secret() {
 -  return 42;
 +  return 43;
  }
- export function pub() {
-   return secret();
 `;
     const result = ok(await getImpact(dir, { diff }));
     // The helper resolves through the intra-file closure to the exports that use it (pub),
@@ -199,6 +192,25 @@ new file mode 100644
   it("returns an error for a malformed diff", async () => {
     const result = await getImpact(dir, { diff: "diff --git a/lib.ts b/lib.ts\n@@ not a hunk @@\n" });
     expect("error" in result).toBe(true);
+  });
+
+  it("rejects a diff that git cannot apply, with git's message", async () => {
+    // Well-formed patch, but the context doesn't match lib.ts — get_impact must reject it
+    // just as preflight's git apply would, instead of analyzing a diff that can't run.
+    const diff = `diff --git a/lib.ts b/lib.ts
+--- a/lib.ts
++++ b/lib.ts
+@@ -1,2 +1,2 @@
+ export function alpha() {
+-  return 999;
++  return 1000;
+`;
+    const result = await getImpact(dir, { diff });
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.error).toContain("does not apply");
+      expect(result.error).toContain("lib.ts");
+    }
   });
 });
 

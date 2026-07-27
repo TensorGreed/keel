@@ -214,9 +214,18 @@ async function applyChange(
 
   const patchFile = path.join(worktree, ".keel-sandbox.patch");
   fs.writeFileSync(patchFile, patch.endsWith("\n") ? patch : patch + "\n");
-  const applied = await git(worktree, ["apply", "--whitespace=nowarn", patchFile]);
-  fs.rmSync(patchFile, { force: true });
-  return applied ? null : "git apply failed (diff does not apply to HEAD)";
+  try {
+    await execFileAsync("git", ["apply", "--whitespace=nowarn", patchFile], {
+      cwd: worktree,
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    return null;
+  } catch (err) {
+    const stderr = String((err as { stderr?: unknown }).stderr ?? "").trim();
+    return `git apply failed${stderr ? `: ${stderr}` : " (diff does not apply to HEAD)"}`;
+  } finally {
+    fs.rmSync(patchFile, { force: true });
+  }
 }
 
 function runnerCommand(runner: Runner, worktree: string, testFiles: string[], jsonFile: string): [string, string[]] {

@@ -119,7 +119,7 @@ describe("preflight orchestration", () => {
     }
   }, 30_000);
 
-  it("reports apply-failed as data, never throwing", async () => {
+  it("rejects a non-applying diff up front with git's message, never throwing", async () => {
     const bogus = `diff --git a/sum.js b/sum.js
 --- a/sum.js
 +++ b/sum.js
@@ -127,9 +127,12 @@ describe("preflight orchestration", () => {
 -this is not the real content
 +something else
 `;
-    const result = ok(await preflight(dir, { diff: bogus }));
-    expect(result.executed.status).toBe("apply-failed");
-    expect(result.executed.failures).toEqual([]);
+    const result = await preflight(dir, { diff: bogus });
+    expect("error" in result).toBe(true);
+    if ("error" in result) {
+      expect(result.error).toContain("does not apply");
+      expect(result.error).toContain("sum.js"); // git's own stderr
+    }
   }, 30_000);
 
   it("returns a bad diff as an error", async () => {

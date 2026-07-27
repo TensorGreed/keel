@@ -123,7 +123,8 @@ describe("sandbox runner", () => {
 `;
     const result = await runSandbox(dir, { diff: bogus, testFiles: ["sum.test.js"] });
     expect(result.status).toBe("apply-failed");
-    expect(result.error).toBeTruthy();
+    // git's own stderr is surfaced, not a generic message.
+    expect(result.error).toContain("sum.js");
   }, 30_000);
 });
 
