@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { registerTools } from "./mcp/tools.js";
+import { loadGraph } from "./graph/cache.js";
 import { SqliteEventStore } from "./events/sqlite-store.js";
 import { ingestCommits } from "./events/ingest.js";
 
@@ -33,6 +34,18 @@ export async function serve(
       store.close();
       process.exit(0);
     });
+  }
+
+  // Warm the graph cache up front (loads from disk or rebuilds, keyed by git HEAD) so the
+  // first get_dependencies call is fast and the on-disk cache is primed.
+  try {
+    const started = Date.now();
+    const { graph, source } = await loadGraph(repoRoot);
+    console.error(
+      `[keel] graph ready (${source}): ${graph.files.length} files in ${Date.now() - started}ms`,
+    );
+  } catch (err) {
+    console.error(`[keel] graph warm-up failed: ${(err as Error).message}`);
   }
 
   const server = new McpServer({ name: "keel", version: "0.0.1" });

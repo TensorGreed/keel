@@ -510,64 +510,128 @@ function collectExports(sourceFile: ts.SourceFile): Set<string> {
 }
 
 /** Build the file-level import graph for a repo. */
+/** The per-file outputs the graph is assembled from. Depends only on the file's own
+ *  content plus the resolver (tsconfig/workspace layout) and which files exist. */
+interface FileScan {
+  imports: Set<string>;
+  importSymbols: Map<string, Set<string>>;
+  exports: Set<string>;
+}
+
+/** Scan a single source file's imports, imported symbols, and exports. */
+function scanFile(resolver: Resolver, root: string, absFile: string): FileScan | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(absFile, "utf8");
+  } catch {
+    return null;
+  }
+  // preProcessFile drives the edges (it also catches require/dynamic imports);
+  // resolve each unique specifier once and reuse for symbol attribution below.
+  const resolvedBySpecifier = new Map<string, string | null>();
+  const resolve = (specifier: string): string | null => {
+    if (!resolvedBySpecifier.has(specifier)) {
+      resolvedBySpecifier.set(specifier, resolveImport(resolver, absFile, specifier));
+    }
+    return resolvedBySpecifier.get(specifier)!;
+  };
+
+  const imports = new Set<string>();
+  const info = ts.preProcessFile(text, true, true);
+  for (const ref of info.importedFiles) {
+    const target = resolve(ref.fileName);
+    if (target) imports.add(toRepoRelative(root, target));
+  }
+
+  const sourceFile = ts.createSourceFile(absFile, text, ts.ScriptTarget.Latest, false);
+  const importSymbols = new Map<string, Set<string>>();
+  for (const [specifier, symbols] of collectModuleUses(sourceFile)) {
+    const target = resolve(specifier);
+    if (!target) continue;
+    const targetRel = toRepoRelative(root, target);
+    let set = importSymbols.get(targetRel);
+    if (!set) {
+      set = new Set();
+      importSymbols.set(targetRel, set);
+    }
+    for (const symbol of symbols) set.add(symbol);
+  }
+
+  return { imports, importSymbols, exports: collectExports(sourceFile) };
+}
+
+/** Invert file -> imports into file -> importedBy (importedBy is fully derived). */
+function invertImports(imports: Map<string, Set<string>>): Map<string, Set<string>> {
+  const importedBy = new Map<string, Set<string>>();
+  for (const [file, targets] of imports) {
+    for (const target of targets) {
+      let set = importedBy.get(target);
+      if (!set) {
+        set = new Set();
+        importedBy.set(target, set);
+      }
+      set.add(file);
+    }
+  }
+  return importedBy;
+}
+
+function emptyScan(): FileScan {
+  return { imports: new Set(), importSymbols: new Map(), exports: new Set() };
+}
+
 export function buildFileGraph(repoRoot: string): FileGraph {
   const root = path.resolve(repoRoot);
   const resolver = createResolver(root);
-  const files = listSourceFiles(root);
   const imports = new Map<string, Set<string>>();
-  const importedBy = new Map<string, Set<string>>();
   const importSymbols = new Map<string, Map<string, Set<string>>>();
   const exportsOf = new Map<string, Set<string>>();
   const relFiles: string[] = [];
 
-  for (const file of files) {
+  for (const file of listSourceFiles(root)) {
     const rel = toRepoRelative(root, file);
     relFiles.push(rel);
-    if (!imports.has(rel)) imports.set(rel, new Set());
-
-    let text: string;
-    try {
-      text = fs.readFileSync(file, "utf8");
-    } catch {
-      continue;
-    }
-    // preProcessFile drives the edges (it also catches require/dynamic imports);
-    // resolve each unique specifier once and reuse for symbol attribution below.
-    const resolvedBySpecifier = new Map<string, string | null>();
-    const resolve = (specifier: string): string | null => {
-      if (!resolvedBySpecifier.has(specifier)) {
-        resolvedBySpecifier.set(specifier, resolveImport(resolver, file, specifier));
-      }
-      return resolvedBySpecifier.get(specifier)!;
-    };
-
-    const info = ts.preProcessFile(text, true, true);
-    for (const ref of info.importedFiles) {
-      const target = resolve(ref.fileName);
-      if (!target) continue;
-      const targetRel = toRepoRelative(root, target);
-      imports.get(rel)!.add(targetRel);
-      if (!importedBy.has(targetRel)) importedBy.set(targetRel, new Set());
-      importedBy.get(targetRel)!.add(rel);
-    }
-
-    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);
-    exportsOf.set(rel, collectExports(sourceFile));
-    const symbolsByTarget = new Map<string, Set<string>>();
-    for (const [specifier, symbols] of collectModuleUses(sourceFile)) {
-      const target = resolve(specifier);
-      if (!target) continue;
-      const targetRel = toRepoRelative(root, target);
-      let set = symbolsByTarget.get(targetRel);
-      if (!set) {
-        set = new Set();
-        symbolsByTarget.set(targetRel, set);
-      }
-      for (const symbol of symbols) set.add(symbol);
-    }
-    importSymbols.set(rel, symbolsByTarget);
+    const scan = scanFile(resolver, root, file) ?? emptyScan();
+    imports.set(rel, scan.imports);
+    importSymbols.set(rel, scan.importSymbols);
+    exportsOf.set(rel, scan.exports);
   }
-  return { imports, importedBy, importSymbols, exportsOf, files: relFiles.sort() };
+
+  return {
+    imports,
+    importedBy: invertImports(imports),
+    importSymbols,
+    exportsOf,
+    files: relFiles.sort(),
+  };
+}
+
+/**
+ * Incrementally rebuild a graph after only the *contents* of existing files changed —
+ * no files added, removed, or resolver-config changes (the cache layer enforces that).
+ * Under those conditions this is provably identical to a full buildFileGraph: an
+ * unchanged file's edges depend on its own content, the resolver, and which files exist,
+ * none of which moved, so only the modified files need rescanning.
+ */
+export function updateFileGraph(
+  repoRoot: string,
+  base: FileGraph,
+  modifiedFiles: Iterable<string>,
+): FileGraph {
+  const root = path.resolve(repoRoot);
+  const resolver = createResolver(root);
+  const imports = new Map(base.imports);
+  const importSymbols = new Map(base.importSymbols);
+  const exportsOf = new Map(base.exportsOf);
+
+  for (const rel of modifiedFiles) {
+    const scan = scanFile(resolver, root, path.resolve(root, rel)) ?? emptyScan();
+    imports.set(rel, scan.imports);
+    importSymbols.set(rel, scan.importSymbols);
+    exportsOf.set(rel, scan.exports);
+  }
+
+  return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, files: base.files };
 }
 
 /** Everything that transitively depends on `file` — the blast radius of changing it. */
@@ -609,4 +673,71 @@ export function reportFor(graph: FileGraph, file: string): DependencyReport {
     importsFrom,
     usedBy,
   };
+}
+
+/**
+ * Whether a repo-relative posix path is a file the graph would scan — the single source
+ * of truth for graph membership, so the cache classifies changed paths exactly as
+ * listSourceFiles walks them (same extensions, same ignored dirs).
+ */
+export function isGraphSourcePath(relPosixPath: string): boolean {
+  const segments = relPosixPath.split("/");
+  if (segments.some((seg) => IGNORED_DIRS.has(seg) || (seg.startsWith(".") && seg !== "."))) {
+    return false;
+  }
+  return SOURCE_EXTENSIONS.has(path.posix.extname(relPosixPath));
+}
+
+/** On-disk graph format; bump when the serialized shape changes so stale caches are dropped. */
+export const GRAPH_FORMAT_VERSION = 1;
+
+export interface SerializedFileGraph {
+  version: number;
+  files: string[];
+  imports: [string, string[]][];
+  importSymbols: [string, [string, string[]][]][];
+  exportsOf: [string, string[]][];
+}
+
+/** Convert a FileGraph to a JSON-serializable form (Maps/Sets -> arrays). importedBy is
+ *  omitted — it's derived from imports on load. */
+export function serializeFileGraph(graph: FileGraph): SerializedFileGraph {
+  return {
+    version: GRAPH_FORMAT_VERSION,
+    files: graph.files,
+    imports: [...graph.imports].map(([file, targets]) => [file, [...targets]]),
+    importSymbols: [...graph.importSymbols].map(([file, byTarget]) => [
+      file,
+      [...byTarget].map(([target, symbols]) => [target, [...symbols]]),
+    ]),
+    exportsOf: [...graph.exportsOf].map(([file, names]) => [file, [...names]]),
+  };
+}
+
+/** Rebuild a FileGraph from serialized form, validating shape. Returns null if the data
+ *  is malformed or from an incompatible version — the caller then rebuilds from source. */
+export function deserializeFileGraph(data: unknown): FileGraph | null {
+  if (typeof data !== "object" || data === null) return null;
+  const d = data as Partial<SerializedFileGraph>;
+  if (d.version !== GRAPH_FORMAT_VERSION) return null;
+  if (!Array.isArray(d.files) || !Array.isArray(d.imports) || !Array.isArray(d.importSymbols) || !Array.isArray(d.exportsOf)) {
+    return null;
+  }
+  try {
+    const imports = new Map<string, Set<string>>(
+      d.imports.map(([file, targets]) => [file, new Set(targets)]),
+    );
+    const importSymbols = new Map<string, Map<string, Set<string>>>(
+      d.importSymbols.map(([file, byTarget]) => [
+        file,
+        new Map(byTarget.map(([target, symbols]) => [target, new Set(symbols)])),
+      ]),
+    );
+    const exportsOf = new Map<string, Set<string>>(
+      d.exportsOf.map(([file, names]) => [file, new Set(names)]),
+    );
+    return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, files: d.files };
+  } catch {
+    return null;
+  }
 }

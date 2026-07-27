@@ -50,7 +50,9 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_history)
-  graph/            System graph: import/dependency scanning (TS compiler API)
+  graph/            System graph: import/dependency scanning (TS compiler API);
+                    cache.ts is the incremental, git-HEAD-keyed graph cache
+
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
@@ -68,9 +70,10 @@ test/               Vitest; fixtures under test/fixtures/
 
 ## Where we are
 
-Phase 0 (substrate skeleton) is well underway. `get_dependencies` walks import edges via
-the TS compiler API (with tsconfig path aliases, workspace resolution, and symbol-level
-usage); `get_history` shells out to git log. The event log persists to SQLite
-(`SqliteEventStore`, node:sqlite) and ingests commits on startup. `keel init` registers
-the server in `.mcp.json`. See `docs/roadmap.md` for the ordered task list; pick up the
+Phase 0 (substrate skeleton) is complete. `get_dependencies` walks import edges via the
+TS compiler API (with tsconfig path aliases, workspace resolution, and symbol-level
+usage), served from an incremental graph cache keyed by git HEAD (`graph/cache.ts`);
+`get_history` shells out to git log. The event log persists to SQLite (`SqliteEventStore`,
+node:sqlite) and ingests commits on startup. `keel init` registers the server in
+`.mcp.json`. Next up is Phase 1 (flight simulator) — see `docs/roadmap.md` and pick up the
 first unchecked item.

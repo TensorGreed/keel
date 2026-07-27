@@ -15,7 +15,7 @@ about any TS/JS repo. **Demo:** graph-backed answers on a fresh public repo.
 - [x] Symbol-level dependencies: which exports of a file each dependent actually uses
 - [x] Event log v1: SQLite persistence via `node:sqlite`, commits ingested on startup
 - [x] `keel init` UX: one command that registers the server in `.mcp.json`
-- [ ] Incremental graph cache keyed by git HEAD (rebuildable from clean clone)
+- [x] Incremental graph cache keyed by git HEAD (rebuildable from clean clone)
 
 ## Phase 1 — Flight simulator MVP
 
