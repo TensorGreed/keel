@@ -23,3 +23,10 @@ CREATE TABLE IF NOT EXISTS event_files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_event_files_path ON event_files (path);
+
+-- Key/value store for ingestion bookkeeping: schema version, last ingested git sha,
+-- and (later) connector cursors. Keeps the events tables free of housekeeping rows.
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);

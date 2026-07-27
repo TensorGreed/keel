@@ -10,8 +10,8 @@
     "keel": "dist/index.js"
   },
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc && node dist/index.js",
+    "build": "tsc && node scripts/copy-schema.mjs",
+    "dev": "tsc && node scripts/copy-schema.mjs && node dist/index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

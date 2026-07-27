@@ -13,7 +13,7 @@ about any TS/JS repo. **Demo:** graph-backed answers on a fresh public repo.
 - [x] `get_history` v0: git log for a path via child_process
 - [x] Resolve tsconfig path aliases + monorepo workspaces in the graph
 - [x] Symbol-level dependencies: which exports of a file each dependent actually uses
-- [ ] Event log v1: SQLite persistence via `node:sqlite`, commits ingested on startup
+- [x] Event log v1: SQLite persistence via `node:sqlite`, commits ingested on startup
 - [ ] `keel init` UX: one command that registers the server in `.mcp.json`
 - [ ] Incremental graph cache keyed by git HEAD (rebuildable from clean clone)
 
