@@ -7,8 +7,9 @@ import * as path from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { reportFor } from "../graph/dependencies.js";
-import { loadGraph } from "../graph/cache.js";
+import { loadGraph, loadHeadGraph } from "../graph/cache.js";
 import { getImpact } from "../simulate/impact.js";
+import { changedRoots, selectTests } from "../simulate/select-tests.js";
 import { historyFor } from "../git/history.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -63,6 +64,27 @@ export function registerTools(server: McpServer, repoRoot: string): void {
         return json(await getImpact(repoRoot, diff !== undefined ? { diff } : {}));
       } catch (err) {
         return json({ error: `get_impact failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
+    "select_tests",
+    "Select the test files to run for a change: given a unified diff (or, if omitted, the " +
+      "working tree's uncommitted changes vs HEAD), return the test files that transitively " +
+      "import any changed source file, what each covers, the shortest import path from test " +
+      "to changed file, and uncoveredChanges — changed source files no test reaches. " +
+      "Import-reachability coverage (a safe overapproximation), the scoping step the " +
+      "sandbox runner will execute. Deterministic; no tests are run.",
+    { diff: z.string().optional().describe("Unified diff; omit to use uncommitted working-tree changes") },
+    async ({ diff }) => {
+      try {
+        const impact = await getImpact(repoRoot, diff !== undefined ? { diff } : {});
+        if ("error" in impact) return json(impact);
+        const { graph } = await loadHeadGraph(repoRoot);
+        return json(selectTests(graph, changedRoots(impact.changedFiles)));
+      } catch (err) {
+        return json({ error: `select_tests failed: ${(err as Error).message}` });
       }
     },
   );

@@ -49,10 +49,12 @@ src/
   index.ts          CLI entry: dispatches `keel serve` (default) and `keel init`
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
-  mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact, get_history)
+  mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
+                    select_tests, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
-  simulate/         Flight simulator: impact.ts maps a diff -> impacted subgraph (scoping)
+  simulate/         Flight simulator scoping: impact.ts (diff -> impacted subgraph),
+                    select-tests.ts (impacted -> covering test files)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/

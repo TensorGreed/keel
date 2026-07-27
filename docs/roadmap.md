@@ -23,7 +23,7 @@ Goal: `preflight(diff)` returns **executed** results, single repo, TS/JS.
 **Demo:** "what happens if I rename this field?" answered with real failures in <2 min.
 
 - [x] Diff → impacted-subgraph mapping (files v0, symbols v1)
-- [ ] Test selection: map test files to the source files they cover (imports v0)
+- [x] Test selection: map test files to the source files they cover (imports v0)
 - [ ] Sandbox runner: apply diff in a temp git worktree, run selected tests (vitest/jest)
 - [ ] Budget caps: max tests, max wall time; caps always reported in output
 - [ ] `preflight` MCP tool: { impacted, testsSelected, executed, failures[] }
