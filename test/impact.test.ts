@@ -125,9 +125,10 @@ describe("diff -> impacted subgraph", () => {
    return secret();
 `;
     const result = ok(await getImpact(dir, { diff }));
-    // Touching a helper can't be localized -> all exports assumed changed.
-    expect(result.changedSymbols["helper.ts"]).toEqual(["*"]);
-    // pub's own lines weren't touched, but its consumer is still impacted.
+    // The helper resolves through the intra-file closure to the exports that use it (pub),
+    // rather than going fully opaque — pub's own lines weren't touched, but its consumer
+    // is still impacted because pub calls secret.
+    expect(result.changedSymbols["helper.ts"]).toEqual(["pub"]);
     expect(narrowedFiles(result)).toEqual(["usesPub.ts"]);
   });
 
@@ -224,5 +225,80 @@ describe("impact from the working tree", () => {
     expect(result.changedFiles).toContainEqual({ path: "lib.ts", status: "modified", inGraph: true });
     expect(result.changedSymbols["lib.ts"]).toEqual(["alpha"]);
     expect(narrowedFiles(result)).toEqual(["usesAlpha.ts", "usesStar.ts"]);
+  });
+});
+
+// Regression: a change to one declaration must also flag exports that reference it
+// internally (the intra-file closure). Working-tree mode: git authors the diff, disk is
+// the new content.
+describe("intra-file reference closure", () => {
+  const repos: string[] = [];
+
+  afterAll(() => {
+    for (const dir of repos) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function repoWith(files: Record<string, string>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-closure-"));
+    repos.push(dir);
+    git(dir, ["init", "-b", "main"]);
+    write(dir, ".gitignore", ".keel/\n");
+    for (const [rel, contents] of Object.entries(files)) write(dir, rel, contents);
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "init"]);
+    return dir;
+  }
+
+  async function impactAfterEdit(dir: string, edits: Record<string, string>): Promise<ImpactResult> {
+    resetGraphCache();
+    await loadGraph(dir); // warm the baseline at HEAD
+    for (const [rel, contents] of Object.entries(edits)) write(dir, rel, contents);
+    resetGraphCache();
+    return ok(await getImpact(dir));
+  }
+
+  it("flags an export that internally calls a changed export (reportFor/transitiveDependents)", async () => {
+    const dir = repoWith({
+      "graph.ts":
+        "export function transitiveDependents() {\n  const seen = new Set();\n  seen.delete(\"x\");\n  return [...seen];\n}\nexport function reportFor() {\n  return transitiveDependents();\n}\n",
+      "consumer.ts": 'import { reportFor } from "./graph.js";\nexport const r = reportFor();\n',
+    });
+    // Delete the `seen.delete("x")` line inside transitiveDependents.
+    const result = await impactAfterEdit(dir, {
+      "graph.ts":
+        "export function transitiveDependents() {\n  const seen = new Set();\n  return [...seen];\n}\nexport function reportFor() {\n  return transitiveDependents();\n}\n",
+    });
+    // The change to transitiveDependents also changes reportFor.
+    expect(result.changedSymbols["graph.ts"]).toEqual(["reportFor", "transitiveDependents"]);
+    // consumer imports only reportFor, yet is impacted.
+    expect(narrowedFiles(result)).toEqual(["consumer.ts"]);
+  });
+
+  it("routes a touched helper only to the exports that use it", async () => {
+    const dir = repoWith({
+      "helpers.ts":
+        "function helper() {\n  return 1;\n}\nexport function usesHelper() {\n  return helper();\n}\nexport function independent() {\n  return 2;\n}\n",
+      "a.ts": 'import { usesHelper } from "./helpers.js";\nexport const x = usesHelper();\n',
+      "b.ts": 'import { independent } from "./helpers.js";\nexport const y = independent();\n',
+    });
+    const result = await impactAfterEdit(dir, {
+      "helpers.ts":
+        "function helper() {\n  return 11;\n}\nexport function usesHelper() {\n  return helper();\n}\nexport function independent() {\n  return 2;\n}\n",
+    });
+    // Only usesHelper reaches the helper; independent (and its consumer) stay out.
+    expect(result.changedSymbols["helpers.ts"]).toEqual(["usesHelper"]);
+    expect(narrowedFiles(result)).toEqual(["a.ts"]);
+  });
+
+  it("follows a re-export chain (export { local })", async () => {
+    const dir = repoWith({
+      "mod.ts": "function core() {\n  return 1;\n}\nexport { core };\n",
+      "c.ts": 'import { core } from "./mod.js";\nexport const z = core();\n',
+    });
+    const result = await impactAfterEdit(dir, {
+      "mod.ts": "function core() {\n  return 2;\n}\nexport { core };\n",
+    });
+    expect(result.changedSymbols["mod.ts"]).toEqual(["core"]);
+    expect(narrowedFiles(result)).toEqual(["c.ts"]);
   });
 });

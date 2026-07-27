@@ -195,12 +195,18 @@ function applyHunks(baseText: string, hunks: Hunk[]): string {
 
 type ChangedExports = { all: true } | { all: false; names: Set<string> };
 
-interface DeclSpan {
+interface Decl {
   startLine: number; // 1-based
   endLine: number;
-  /** exported names this top-level statement produces, or null if touching it is opaque
-   *  (a non-exported helper, an import, etc.) whose effect on exports we can't localize */
-  names: string[] | null;
+  /** local names this statement introduces into module scope (for resolving references) */
+  defines: string[];
+  /** export names this statement produces (empty for a non-exported helper) */
+  exports: string[];
+  /** top-level names referenced in this statement's body (identifier walk, over-approx) */
+  refs: Set<string>;
+  /** touching this can't be localized to specific exports -> treat the file as all-changed
+   *  (module-level side-effect code, an import, or anything we can't model) */
+  opaque: boolean;
 }
 
 /** Exported names a single top-level statement produces, or null if it is not a self-
@@ -245,34 +251,188 @@ function collectBindingNames(name: ts.BindingName, into: string[]): void {
   }
 }
 
+/** Local names a statement introduces into module scope, regardless of export. */
+function definedNames(stmt: ts.Statement): string[] {
+  if (ts.isVariableStatement(stmt)) {
+    const names: string[] = [];
+    for (const decl of stmt.declarationList.declarations) collectBindingNames(decl.name, names);
+    return names;
+  }
+  if (
+    (ts.isFunctionDeclaration(stmt) ||
+      ts.isClassDeclaration(stmt) ||
+      ts.isInterfaceDeclaration(stmt) ||
+      ts.isTypeAliasDeclaration(stmt) ||
+      ts.isEnumDeclaration(stmt) ||
+      ts.isModuleDeclaration(stmt)) &&
+    stmt.name &&
+    ts.isIdentifier(stmt.name)
+  ) {
+    return [stmt.name.text];
+  }
+  return [];
+}
+
+/**
+ * Identifiers referenced in a node's body. Over-approximates on purpose (per the shadowing
+ * rule: if unsure whether an identifier is a top-level reference, assume it is) — but skips
+ * clear member/property names, which are never top-level bindings.
+ */
+function collectReferencedIdentifiers(node: ts.Node): Set<string> {
+  const refs = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isPropertyAccessExpression(n)) {
+      visit(n.expression); // `a.foo` -> `a` is a ref, `foo` is a member
+      return;
+    }
+    if (ts.isQualifiedName(n)) {
+      visit(n.left);
+      return;
+    }
+    if (ts.isPropertyAssignment(n)) {
+      if (ts.isComputedPropertyName(n.name)) visit(n.name.expression);
+      visit(n.initializer);
+      return;
+    }
+    if (ts.isBindingElement(n) && n.propertyName && !ts.isComputedPropertyName(n.propertyName)) {
+      visit(n.name); // `const { a: b } = x` -> skip key `a`, keep binding `b`
+      if (n.initializer) visit(n.initializer);
+      return;
+    }
+    if (isNamedMember(n)) {
+      // An interface/class/enum member name is never a top-level reference; skip it but
+      // still visit its type, initializer, parameters, and body (which may hold refs).
+      if (n.name && ts.isComputedPropertyName(n.name)) visit(n.name.expression);
+      ts.forEachChild(n, (child) => {
+        if (child !== n.name) visit(child);
+      });
+      return;
+    }
+    if (ts.isIdentifier(n)) {
+      refs.add(n.text);
+      return;
+    }
+    ts.forEachChild(n, visit);
+  };
+  ts.forEachChild(node, visit);
+  return refs;
+}
+
+type NamedMember = ts.NamedDeclaration & { name?: ts.Node };
+
+function isNamedMember(n: ts.Node): n is NamedMember {
+  return (
+    ts.isPropertySignature(n) ||
+    ts.isMethodSignature(n) ||
+    ts.isPropertyDeclaration(n) ||
+    ts.isMethodDeclaration(n) ||
+    ts.isGetAccessorDeclaration(n) ||
+    ts.isSetAccessorDeclaration(n) ||
+    ts.isEnumMember(n)
+  );
+}
+
+/** Classify every top-level statement of the new content into a Decl. */
+function classifyDecls(newContent: string): Decl[] {
+  const sf = ts.createSourceFile("change.ts", newContent, ts.ScriptTarget.Latest, true);
+  return sf.statements.map((stmt) => {
+    const startLine = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
+    const endLine = sf.getLineAndCharacterOfPosition(stmt.getEnd()).line + 1;
+    const base = { startLine, endLine };
+
+    if (ts.isImportDeclaration(stmt) || ts.isImportEqualsDeclaration(stmt)) {
+      // Import changes can reorder/side-effect; keep them opaque as before.
+      return { ...base, defines: [], exports: [], refs: new Set<string>(), opaque: true };
+    }
+    if (ts.isExportDeclaration(stmt)) {
+      // `export { local }` references the local; `export { x } from "..."` references nothing here.
+      const refs = stmt.moduleSpecifier ? new Set<string>() : collectReferencedIdentifiers(stmt);
+      return { ...base, defines: [], exports: statementExportNames(stmt) ?? ["*"], refs, opaque: false };
+    }
+    if (ts.isExportAssignment(stmt)) {
+      return { ...base, defines: [], exports: ["default"], refs: collectReferencedIdentifiers(stmt), opaque: false };
+    }
+    const defines = definedNames(stmt);
+    if (defines.length > 0) {
+      return {
+        ...base,
+        defines,
+        exports: statementExportNames(stmt) ?? [], // [] for a non-exported helper
+        refs: collectReferencedIdentifiers(stmt),
+        opaque: false,
+      };
+    }
+    // A top-level statement that declares nothing (bare expression, side-effect code).
+    return { ...base, defines: [], exports: [], refs: collectReferencedIdentifiers(stmt), opaque: true };
+  });
+}
+
 /**
  * Which exports of a modified file are (potentially) changed, from its new content and the
- * touched new-file lines. Returns { all: true } (opaque) when the change can't be confined
- * to specific exports. Removed exports (present at baseline, gone now) are always included.
+ * touched new-file lines. Beyond the touched declarations' own exports, expands to every
+ * export whose declaration transitively references a touched one — so a change to an
+ * internal helper (or to one export used by another) reaches the exports that depend on it.
+ * Strictly more precise than reporting only the touched declarations, never less safe:
+ * falls back to { all: true } for module-level/import touches or if analysis fails. Removed
+ * exports (present at baseline, gone now) are always included.
  */
 function changedExportsOf(
   newContent: string,
   touched: Set<number>,
   baselineExports: Set<string>,
 ): ChangedExports {
-  const sf = ts.createSourceFile("change.ts", newContent, ts.ScriptTarget.Latest, true);
-  const spans: DeclSpan[] = [];
-  const newExports = new Set<string>();
-  for (const stmt of sf.statements) {
-    const names = statementExportNames(stmt);
-    const startLine = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
-    const endLine = sf.getLineAndCharacterOfPosition(stmt.getEnd()).line + 1;
-    spans.push({ startLine, endLine, names });
-    if (names) for (const n of names) newExports.add(n);
+  let decls: Decl[];
+  try {
+    decls = classifyDecls(newContent);
+  } catch {
+    return { all: true };
+  }
+
+  const touchedDecls: number[] = [];
+  for (const line of touched) {
+    const idx = decls.findIndex((d) => line >= d.startLine && line <= d.endLine);
+    if (idx === -1) return { all: true }; // module-level / between declarations
+    if (decls[idx]!.opaque) return { all: true }; // import / unmodelable
+    if (!touchedDecls.includes(idx)) touchedDecls.push(idx);
+  }
+
+  // name -> declarations defining it; then reverse edges: declaration -> its referrers.
+  const definers = new Map<string, number[]>();
+  decls.forEach((decl, i) => {
+    for (const name of decl.defines) {
+      const arr = definers.get(name);
+      if (arr) arr.push(i);
+      else definers.set(name, [i]);
+    }
+  });
+  const referrers = new Map<number, number[]>();
+  decls.forEach((decl, i) => {
+    for (const name of decl.refs) {
+      for (const j of definers.get(name) ?? []) {
+        if (j === i) continue;
+        const arr = referrers.get(j);
+        if (arr) arr.push(i);
+        else referrers.set(j, [i]);
+      }
+    }
+  });
+
+  // Intra-file closure: propagate from touched declarations to everything referencing them.
+  const affected = new Set<number>(touchedDecls);
+  const queue = [...touchedDecls];
+  for (let k = 0; k < queue.length; k++) {
+    for (const referrer of referrers.get(queue[k]!) ?? []) {
+      if (!affected.has(referrer)) {
+        affected.add(referrer);
+        queue.push(referrer);
+      }
+    }
   }
 
   const names = new Set<string>();
-  for (const line of touched) {
-    const span = spans.find((s) => line >= s.startLine && line <= s.endLine);
-    if (!span || span.names === null) return { all: true }; // module-level or a helper -> opaque
-    for (const n of span.names) names.add(n);
-  }
-  // An export that existed at baseline but is gone now definitely changed (removal).
+  const newExports = new Set<string>();
+  for (const decl of decls) for (const name of decl.exports) newExports.add(name);
+  for (const i of affected) for (const name of decls[i]!.exports) names.add(name);
   for (const name of baselineExports) if (!newExports.has(name)) names.add(name);
   return { all: false, names };
 }
