@@ -17,6 +17,14 @@ export interface FileGraph {
   imports: Map<string, Set<string>>;
   /** file -> files that import it */
   importedBy: Map<string, Set<string>>;
+  /**
+   * importer -> (imported file -> symbols used). "default" is the default export,
+   * "*" means the whole module (namespace object escaping, dynamic import, require).
+   * An empty set is a side-effect-only import.
+   */
+  importSymbols: Map<string, Map<string, Set<string>>>;
+  /** file -> its exported names ("default"; "*" when it re-exports everything from another module) */
+  exportsOf: Map<string, Set<string>>;
   /** all scanned source files */
   files: string[];
 }
@@ -29,6 +37,12 @@ export interface DependencyReport {
   dependents: string[];
   /** every file that transitively depends on this file (the blast radius) */
   transitiveDependents: string[];
+  /** names this file exports ("default"; "*" = re-exports everything from another module) */
+  exports: string[];
+  /** dependency file -> symbols this file imports from it (see FileGraph.importSymbols) */
+  importsFrom: Record<string, string[]>;
+  /** dependent file -> exports of this file it actually uses */
+  usedBy: Record<string, string[]>;
 }
 
 function listSourceFiles(root: string): string[] {
@@ -331,6 +345,170 @@ function resolveImport(resolver: Resolver, fromFile: string, specifier: string):
   return null;
 }
 
+/** Whole-module marker: namespace object escapes, dynamic import, require, export-star. */
+const WHOLE_MODULE = "*";
+
+function moduleSpecifierText(node: ts.ImportDeclaration | ts.ExportDeclaration): string | null {
+  return node.moduleSpecifier && ts.isStringLiteralLike(node.moduleSpecifier)
+    ? node.moduleSpecifier.text
+    : null;
+}
+
+/**
+ * Which symbols each module specifier contributes to this file, by AST walk.
+ * Named imports record the source-side name (`import { a as b }` -> "a"); namespace
+ * imports are narrowed to the members actually accessed, falling back to "*" when the
+ * namespace object itself escapes (passed around, spread, re-exported).
+ */
+function collectModuleUses(sourceFile: ts.SourceFile): Map<string, Set<string>> {
+  const uses = new Map<string, Set<string>>();
+  const forSpecifier = (specifier: string): Set<string> => {
+    let set = uses.get(specifier);
+    if (!set) {
+      set = new Set();
+      uses.set(specifier, set);
+    }
+    return set;
+  };
+  /** local namespace-import identifier -> its module specifier */
+  const namespaces = new Map<string, string>();
+
+  for (const stmt of sourceFile.statements) {
+    if (ts.isImportDeclaration(stmt)) {
+      const specifier = moduleSpecifierText(stmt);
+      if (specifier === null) continue;
+      const symbols = forSpecifier(specifier);
+      const clause = stmt.importClause;
+      if (clause?.name) symbols.add("default");
+      if (clause?.namedBindings) {
+        if (ts.isNamedImports(clause.namedBindings)) {
+          for (const element of clause.namedBindings.elements) {
+            symbols.add((element.propertyName ?? element.name).text);
+          }
+        } else {
+          namespaces.set(clause.namedBindings.name.text, specifier);
+        }
+      }
+    } else if (ts.isExportDeclaration(stmt)) {
+      const specifier = moduleSpecifierText(stmt);
+      if (specifier === null) continue;
+      const symbols = forSpecifier(specifier);
+      if (stmt.exportClause && ts.isNamedExports(stmt.exportClause)) {
+        for (const element of stmt.exportClause.elements) {
+          symbols.add((element.propertyName ?? element.name).text);
+        }
+      } else {
+        // `export * from` and `export * as ns from` forward the whole module.
+        symbols.add(WHOLE_MODULE);
+      }
+    } else if (
+      ts.isImportEqualsDeclaration(stmt) &&
+      ts.isExternalModuleReference(stmt.moduleReference) &&
+      ts.isStringLiteralLike(stmt.moduleReference.expression)
+    ) {
+      forSpecifier(stmt.moduleReference.expression.text).add(WHOLE_MODULE);
+    }
+  }
+
+  const visit = (node: ts.Node): void => {
+    // Import/export-from statements were handled above; their identifiers are not uses.
+    if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)) return;
+    if (ts.isExportDeclaration(node) && node.moduleSpecifier) return;
+
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteralLike(arg)) forSpecifier(arg.text).add(WHOLE_MODULE);
+    } else if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === "require"
+    ) {
+      const arg = node.arguments[0];
+      if (arg && ts.isStringLiteralLike(arg)) forSpecifier(arg.text).add(WHOLE_MODULE);
+    } else if (ts.isPropertyAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const specifier = namespaces.get(node.expression.text);
+      if (specifier !== undefined) {
+        forSpecifier(specifier).add(node.name.text);
+        return; // don't descend: the base identifier is attributed, not escaping
+      }
+    } else if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression)) {
+      const specifier = namespaces.get(node.expression.text);
+      if (specifier !== undefined) {
+        const arg = node.argumentExpression;
+        forSpecifier(specifier).add(ts.isStringLiteralLike(arg) ? arg.text : WHOLE_MODULE);
+        ts.forEachChild(arg, visit);
+        return;
+      }
+    } else if (ts.isQualifiedName(node) && ts.isIdentifier(node.left)) {
+      const specifier = namespaces.get(node.left.text);
+      if (specifier !== undefined) {
+        forSpecifier(specifier).add(node.right.text);
+        return;
+      }
+    } else if (ts.isIdentifier(node)) {
+      // A bare reference to the namespace binding: the whole module escapes.
+      const specifier = namespaces.get(node.text);
+      if (specifier !== undefined) forSpecifier(specifier).add(WHOLE_MODULE);
+    }
+    ts.forEachChild(node, visit);
+  };
+  ts.forEachChild(sourceFile, visit);
+
+  return uses;
+}
+
+function bindingNames(name: ts.BindingName, into: Set<string>): void {
+  if (ts.isIdentifier(name)) {
+    into.add(name.text);
+    return;
+  }
+  for (const element of name.elements) {
+    if (ts.isBindingElement(element)) bindingNames(element.name, into);
+  }
+}
+
+/** Exported names of a file, from declaration modifiers and export statements. */
+function collectExports(sourceFile: ts.SourceFile): Set<string> {
+  const names = new Set<string>();
+  for (const stmt of sourceFile.statements) {
+    if (ts.isExportAssignment(stmt)) {
+      names.add("default");
+      continue;
+    }
+    if (ts.isExportDeclaration(stmt)) {
+      if (stmt.exportClause) {
+        if (ts.isNamedExports(stmt.exportClause)) {
+          for (const element of stmt.exportClause.elements) names.add(element.name.text);
+        } else {
+          names.add(stmt.exportClause.name.text); // export * as ns from "..."
+        }
+      } else {
+        names.add(WHOLE_MODULE); // export * from "..." — contents unknown without resolving
+      }
+      continue;
+    }
+    const modifiers = ts.canHaveModifiers(stmt) ? ts.getModifiers(stmt) : undefined;
+    if (!modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)) continue;
+    if (modifiers.some((m) => m.kind === ts.SyntaxKind.DefaultKeyword)) {
+      names.add("default");
+    } else if (ts.isVariableStatement(stmt)) {
+      for (const decl of stmt.declarationList.declarations) bindingNames(decl.name, names);
+    } else if (
+      (ts.isFunctionDeclaration(stmt) ||
+        ts.isClassDeclaration(stmt) ||
+        ts.isInterfaceDeclaration(stmt) ||
+        ts.isTypeAliasDeclaration(stmt) ||
+        ts.isEnumDeclaration(stmt) ||
+        ts.isModuleDeclaration(stmt)) &&
+      stmt.name &&
+      ts.isIdentifier(stmt.name)
+    ) {
+      names.add(stmt.name.text);
+    }
+  }
+  return names;
+}
+
 /** Build the file-level import graph for a repo. */
 export function buildFileGraph(repoRoot: string): FileGraph {
   const root = path.resolve(repoRoot);
@@ -338,6 +516,8 @@ export function buildFileGraph(repoRoot: string): FileGraph {
   const files = listSourceFiles(root);
   const imports = new Map<string, Set<string>>();
   const importedBy = new Map<string, Set<string>>();
+  const importSymbols = new Map<string, Map<string, Set<string>>>();
+  const exportsOf = new Map<string, Set<string>>();
   const relFiles: string[] = [];
 
   for (const file of files) {
@@ -351,17 +531,43 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     } catch {
       continue;
     }
+    // preProcessFile drives the edges (it also catches require/dynamic imports);
+    // resolve each unique specifier once and reuse for symbol attribution below.
+    const resolvedBySpecifier = new Map<string, string | null>();
+    const resolve = (specifier: string): string | null => {
+      if (!resolvedBySpecifier.has(specifier)) {
+        resolvedBySpecifier.set(specifier, resolveImport(resolver, file, specifier));
+      }
+      return resolvedBySpecifier.get(specifier)!;
+    };
+
     const info = ts.preProcessFile(text, true, true);
     for (const ref of info.importedFiles) {
-      const target = resolveImport(resolver, file, ref.fileName);
+      const target = resolve(ref.fileName);
       if (!target) continue;
       const targetRel = toRepoRelative(root, target);
       imports.get(rel)!.add(targetRel);
       if (!importedBy.has(targetRel)) importedBy.set(targetRel, new Set());
       importedBy.get(targetRel)!.add(rel);
     }
+
+    const sourceFile = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false);
+    exportsOf.set(rel, collectExports(sourceFile));
+    const symbolsByTarget = new Map<string, Set<string>>();
+    for (const [specifier, symbols] of collectModuleUses(sourceFile)) {
+      const target = resolve(specifier);
+      if (!target) continue;
+      const targetRel = toRepoRelative(root, target);
+      let set = symbolsByTarget.get(targetRel);
+      if (!set) {
+        set = new Set();
+        symbolsByTarget.set(targetRel, set);
+      }
+      for (const symbol of symbols) set.add(symbol);
+    }
+    importSymbols.set(rel, symbolsByTarget);
   }
-  return { imports, importedBy, files: relFiles.sort() };
+  return { imports, importedBy, importSymbols, exportsOf, files: relFiles.sort() };
 }
 
 /** Everything that transitively depends on `file` — the blast radius of changing it. */
@@ -382,10 +588,25 @@ export function transitiveDependents(graph: FileGraph, file: string): string[] {
 }
 
 export function reportFor(graph: FileGraph, file: string): DependencyReport {
+  const dependencies = [...(graph.imports.get(file) ?? [])].sort();
+  const dependents = [...(graph.importedBy.get(file) ?? [])].sort();
+
+  const importsFrom: Record<string, string[]> = {};
+  for (const dependency of dependencies) {
+    importsFrom[dependency] = [...(graph.importSymbols.get(file)?.get(dependency) ?? [])].sort();
+  }
+  const usedBy: Record<string, string[]> = {};
+  for (const dependent of dependents) {
+    usedBy[dependent] = [...(graph.importSymbols.get(dependent)?.get(file) ?? [])].sort();
+  }
+
   return {
     file,
-    dependencies: [...(graph.imports.get(file) ?? [])].sort(),
-    dependents: [...(graph.importedBy.get(file) ?? [])].sort(),
+    dependencies,
+    dependents,
     transitiveDependents: transitiveDependents(graph, file),
+    exports: [...(graph.exportsOf.get(file) ?? [])].sort(),
+    importsFrom,
+    usedBy,
   };
 }

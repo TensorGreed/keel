@@ -37,8 +37,10 @@ export function registerTools(server: McpServer, repoRoot: string): void {
   server.tool(
     "get_dependencies",
     "Dependency report for a source file in the repo: what it imports, what imports it, " +
-      "and the full transitive blast radius of changing it. Deterministic, built from " +
-      "static analysis — no guesses.",
+      "the full transitive blast radius of changing it, and symbol-level detail — the " +
+      "file's exports, which symbols it imports from each dependency (importsFrom), and " +
+      "which of its exports each dependent actually uses (usedBy; 'default' = default " +
+      "export, '*' = whole module). Deterministic, built from static analysis — no guesses.",
     { file: z.string().describe("Path to a source file, relative to the repo root") },
     async ({ file }) => {
       try {
