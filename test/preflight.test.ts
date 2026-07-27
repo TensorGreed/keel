@@ -202,5 +202,9 @@ describe("preflight with vitest (structured failures)", () => {
     const failure = result.executed.failures.find((f) => f.file === "sum.test.ts");
     expect(failure).toBeDefined();
     expect(failure!.graphPath).toEqual(["sum.test.ts", "sum.ts"]);
+    // The full assertion stack comes through as trace, message is its first line.
+    expect(failure!.trace).toBeDefined();
+    expect(failure!.trace!.split("\n").length).toBeGreaterThan(1);
+    expect(failure!.trace!.startsWith(failure!.message)).toBe(true);
   }, 60_000);
 });

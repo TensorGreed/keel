@@ -27,7 +27,10 @@ export interface PreflightOptions {
 export interface PreflightFailure {
   test: string;
   file?: string;
+  /** the failure's first line */
   message: string;
+  /** the full error/stack the runner reported (capped) */
+  trace?: string;
   /** import chain from the failing test file back to the nearest changed file */
   graphPath?: string[];
 }
@@ -100,6 +103,7 @@ export async function preflight(
       test: f.name,
       ...(f.file ? { file: f.file } : {}),
       message: f.message,
+      ...(f.trace ? { trace: f.trace } : {}),
       ...(graphPath ? { graphPath } : {}),
     };
   });

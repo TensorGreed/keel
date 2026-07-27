@@ -96,7 +96,7 @@ export function registerTools(server: McpServer, repoRoot: string): void {
       "uncommitted changes) to its impacted files, select the covering tests, apply the " +
       "diff in an isolated git worktree, and run those tests — returning EXECUTED results, " +
       "not predictions. Output: { impacted, testsSelected, uncoveredChanges, executed " +
-      "{ status, passed, failed, failures[{ test, file, message, graphPath }] }, budget }. " +
+      "{ status, passed, failed, failures[{ test, file, message, trace, graphPath }] }, budget }. " +
       "Hard-capped by maxTests (default 50) and maxSeconds (default 120), always reported; " +
       "over the cap, tests nearest the change run first. Errors (bad diff, apply-failed, " +
       "timeout) come back as data in status, never thrown.",

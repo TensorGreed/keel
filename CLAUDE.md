@@ -81,8 +81,11 @@ usage), served from an incremental graph cache keyed by git HEAD (`graph/cache.t
 node:sqlite) and ingests commits on startup. `keel init` registers the server in
 `.mcp.json`.
 
-Phase 1 (flight simulator) is essentially built: `get_impact` maps a diff to its impacted
-subgraph (symbol-narrowed, with an intra-file reference closure), `select_tests` picks the
-covering tests, `sandbox.ts` runs them in an isolated worktree, and `preflight` ties it all
-together into executed, budget-capped results. Remaining Phase 1 polish and Phase 2 (team
-memory) are the next work — see `docs/roadmap.md` and pick up the first unchecked item.
+Phase 1 (flight simulator) is complete. `get_impact` maps a diff to its impacted subgraph
+(symbol-narrowed, with an intra-file reference closure), `select_tests` picks the covering
+tests, and `preflight` ties it together: it validates the diff with `git apply`, applies it
+in an isolated worktree (`sandbox.ts`), and runs the selected tests under hard budget caps,
+returning executed pass/fail with per-failure traces and the import path from each failing
+test back to the change. Explicit diffs are validated the same way analysis and execution
+apply them, so the two never disagree. Phase 2 (team memory) is the next work — see
+`docs/roadmap.md` and pick up the first unchecked item.

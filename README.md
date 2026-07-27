@@ -20,12 +20,17 @@ See [docs/concept.md](docs/concept.md) for the vision and
 
 ## Status
 
-Early — Phase 0 (substrate skeleton). Working today, for TypeScript/JavaScript repos:
+Phases 0–1 complete (substrate + flight simulator). Working today, for TypeScript/JavaScript repos:
 
-- `get_dependencies` — file-level import graph with transitive blast radius
+- `get_dependencies` — import graph with transitive blast radius and symbol-level usage
+- `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)
+- `select_tests` — the test files that cover a change, and what's left uncovered
+- `preflight` — validate a diff, apply it in an isolated worktree, and run the covering
+  tests under hard budget caps: **executed** pass/fail with traces and the graph path from
+  each failure back to the change
 - `get_history` — git history for any path
 
-See [docs/roadmap.md](docs/roadmap.md) for what's next.
+See [docs/roadmap.md](docs/roadmap.md) for what's next (Phase 2: team memory).
 
 ## Quick start
 

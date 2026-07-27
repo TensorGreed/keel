@@ -38,7 +38,10 @@ export type RunStatus =
 export interface TestFailure {
   name: string;
   file?: string;
+  /** the failure's first line — a one-line summary */
   message: string;
+  /** the full error/stack the runner reported, capped; omitted when it adds nothing to message */
+  trace?: string;
 }
 
 export interface SandboxResult {
@@ -160,10 +163,14 @@ export function parseJestJson(
     const file = suite.name ? toRepoRel(worktree, suite.name) : undefined;
     for (const assertion of suite.assertionResults ?? []) {
       if (assertion.status === "failed") {
+        // Keep the full stack the reporter gives us (capped), with message as its first line.
+        const trace = capLines((assertion.failureMessages ?? []).join("\n\n").trim(), MAX_TRACE_LINES);
+        const message = (trace.split("\n", 1)[0] || "(no message)").trim();
         failures.push({
           name: assertion.fullName || assertion.title || "(unnamed test)",
           ...(file ? { file } : {}),
-          message: (assertion.failureMessages ?? []).join("\n\n").trim() || "(no message)",
+          message,
+          ...(trace && trace !== message ? { trace } : {}),
         });
       }
     }
@@ -173,6 +180,15 @@ export function parseJestJson(
     failed: report.numFailedTests ?? failures.length,
     failures,
   };
+}
+
+const MAX_TRACE_LINES = 50;
+
+/** Cap a trace to at most `max` lines, noting how many were dropped. */
+function capLines(text: string, max: number): string {
+  const lines = text.split("\n");
+  if (lines.length <= max) return text;
+  return [...lines.slice(0, max), `… (${lines.length - max} more lines)`].join("\n");
 }
 
 function toRepoRel(root: string, absolute: string): string {

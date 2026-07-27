@@ -151,6 +151,31 @@ describe("parseJestJson", () => {
     });
   });
 
+  it("keeps a multi-line stack as trace, with message as its first line, capped at 50 lines", () => {
+    const stack = ["AssertionError: expected 5 to be -1", ...Array.from({ length: 80 }, (_, i) => `  at frame ${i}`)].join("\n");
+    const json = JSON.stringify({
+      numPassedTests: 0,
+      numFailedTests: 1,
+      testResults: [{ name: "/tmp/wt/a.test.ts", assertionResults: [{ fullName: "t", status: "failed", failureMessages: [stack] }] }],
+    });
+    const parsed = parseJestJson(json, "/tmp/wt")!;
+    const failure = parsed.failures[0]!;
+    expect(failure.message).toBe("AssertionError: expected 5 to be -1");
+    expect(failure.trace).toBeDefined();
+    expect(failure.trace!.split("\n")[0]).toBe("AssertionError: expected 5 to be -1");
+    // 81-line stack -> 50 kept + a truncation note.
+    expect(failure.trace!.split("\n")).toHaveLength(51);
+    expect(failure.trace!).toContain("more lines)");
+  });
+
+  it("omits trace when the failure is a single line", () => {
+    const json = JSON.stringify({
+      numFailedTests: 1,
+      testResults: [{ name: "/tmp/wt/a.test.ts", assertionResults: [{ fullName: "t", status: "failed", failureMessages: ["boom"] }] }],
+    });
+    expect(parseJestJson(json, "/tmp/wt")!.failures[0]).toEqual({ name: "t", file: "a.test.ts", message: "boom" });
+  });
+
   it("returns null for non-JSON", () => {
     expect(parseJestJson("not json", "/tmp/wt")).toBeNull();
   });
