@@ -15,6 +15,7 @@ import { historyFor } from "../git/history.js";
 import { answerWhy } from "../retrieval/why.js";
 import { OllamaEmbeddingModel } from "../retrieval/embed.js";
 import { resolveRepoRef } from "../github/remote.js";
+import { computeVerdict } from "../trust/verdict.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -27,7 +28,10 @@ function json(data: unknown): { content: Array<{ type: "text"; text: string }> }
 }
 
 export function registerTools(server: McpServer, repoRoot: string, store?: SqliteEventStore): void {
-  if (store) registerWhy(server, repoRoot, store);
+  if (store) {
+    registerWhy(server, repoRoot, store);
+    registerVerdict(server, repoRoot, store);
+  }
 
   server.tool(
     "get_dependencies",
@@ -187,6 +191,37 @@ function registerWhy(server: McpServer, repoRoot: string, store: SqliteEventStor
         return json(result);
       } catch (err) {
         return json({ error: `why failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** Machine-checkable pass/warn/block verdict over the change, against keel.policy.json. */
+function registerVerdict(server: McpServer, repoRoot: string, store: SqliteEventStore): void {
+  server.tool(
+    "verdict",
+    "A machine-checkable pass | warn | block on a change, for a CI check or an agent to gate " +
+      "on. Composes existing facts — blast radius, the executed sim (preflight), uncovered " +
+      "changes, and decisions the change may affect — and evaluates them against keel.policy.json " +
+      "at the repo root (conservative defaults if absent). Every reason names its rule and the " +
+      "exact fact that triggered it. Pure policy evaluation, no model calls. Give a unified diff, " +
+      "or omit to use the working tree. Sim errors (apply-failed/timed-out) block, returned as data.",
+    {
+      diff: z.string().optional().describe("Unified diff to judge; omit to use uncommitted working-tree changes"),
+      maxTests: z.number().int().min(0).optional().describe("Cap on tests the sim runs (default 50 / KEEL_MAX_TESTS)"),
+      maxSeconds: z.number().int().min(1).optional().describe("Sim wall-time cap in seconds (default 120 / KEEL_MAX_SECONDS)"),
+    },
+    async ({ diff, maxTests, maxSeconds }) => {
+      try {
+        return json(
+          await computeVerdict(repoRoot, store, {
+            ...(diff !== undefined ? { diff } : {}),
+            ...(maxTests !== undefined ? { maxTests } : {}),
+            ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+          }),
+        );
+      } catch (err) {
+        return json({ error: `verdict failed: ${(err as Error).message}` });
       }
     },
   );

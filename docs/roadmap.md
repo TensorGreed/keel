@@ -45,9 +45,9 @@ Goal: `why(path)` answers with mined decision records and receipts.
 Goal: policy verdicts that let agents take bigger changes safely.
 **Demo:** an agent completes a cross-cutting refactor gated by Keel and auto-merges.
 
-- [ ] Verdict object: blast radius, sim status, decision conflicts
-- [ ] Policy file format (`keel.policy.json`) + evaluator (pure, no model calls)
-- [ ] `verdict` MCP tool; GitHub check integration
+- [x] Verdict object: blast radius, sim status, decision conflicts
+- [x] Policy file format (`keel.policy.json`) + evaluator (pure, no model calls)
+- [x] `verdict` MCP tool; GitHub check integration (tool done; GitHub check wiring TODO)
 - [ ] Claude Code hook recipe: call `preflight`/`verdict` before proposing changes
 
 ## Later

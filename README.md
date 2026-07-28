@@ -20,7 +20,8 @@ See [docs/concept.md](docs/concept.md) for the vision and
 
 ## Status
 
-Phases 0–1 complete (substrate + flight simulator). Working today, for TypeScript/JavaScript repos:
+Phases 0–2 complete (substrate, flight simulator, team memory); Phase 3 (trust layer)
+underway. Working today, for TypeScript/JavaScript repos:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)
@@ -28,9 +29,13 @@ Phases 0–1 complete (substrate + flight simulator). Working today, for TypeScr
 - `preflight` — validate a diff, apply it in an isolated worktree, and run the covering
   tests under hard budget caps: **executed** pass/fail with traces and the graph path from
   each failure back to the change
+- `why` — the decision behind a file or answer to a question, with PR source receipts
+  (`keel ingest` + `keel mine` populate it; `keel decision add`/`reject` for human overrides)
+- `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
+  radius, the executed sim, coverage, and affected decisions against `keel.policy.json`
 - `get_history` — git history for any path
 
-See [docs/roadmap.md](docs/roadmap.md) for what's next (Phase 2: team memory).
+See [docs/roadmap.md](docs/roadmap.md) for what's next (Phase 3: GitHub check + hook recipe).
 
 ## Quick start
 

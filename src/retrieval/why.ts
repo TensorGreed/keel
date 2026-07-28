@@ -220,25 +220,34 @@ async function searchOrKeyword(
 }
 
 function toWhyDecision(c: Candidate, repoRef: RepoRef | null): WhyDecision {
-  const p = c.decision.payload;
+  return decisionReceipt(c.decision, c.reason, repoRef);
+}
+
+/**
+ * Turn a decision event into a receipt-bearing record: summary/rationale/alternatives, its
+ * origin, why it matched, and its source (PR number/URL/author/date — URL from the ingested
+ * link, else reconstructed from owner/repo + number). Shared by `why` and the trust layer.
+ */
+export function decisionReceipt(decision: KeelEvent, matchReason: string, repoRef: RepoRef | null): WhyDecision {
+  const p = decision.payload;
   const prNumber = typeof p["prNumber"] === "number" ? p["prNumber"] : null;
   const explicitUrl = typeof p["prUrl"] === "string" ? p["prUrl"] : null;
   const url = explicitUrl ?? (repoRef && prNumber !== null ? `https://github.com/${repoRef.owner}/${repoRef.repo}/pull/${prNumber}` : null);
   return {
-    id: c.decision.externalId ?? "",
-    summary: typeof p["summary"] === "string" ? p["summary"] : (c.decision.title ?? ""),
+    id: decision.externalId ?? "",
+    summary: typeof p["summary"] === "string" ? p["summary"] : (decision.title ?? ""),
     rationale: typeof p["rationale"] === "string" ? p["rationale"] : "",
     alternatives: Array.isArray(p["alternatives"]) ? (p["alternatives"] as unknown[]).filter((a): a is string => typeof a === "string") : [],
     confidence: typeof p["confidence"] === "string" ? p["confidence"] : "low",
-    origin: originOf(c.decision),
-    matchReason: c.reason,
+    origin: originOf(decision),
+    matchReason,
     source: {
       pr: prNumber,
       url,
-      author: c.decision.actor ?? (typeof p["author"] === "string" ? p["author"] : null),
-      date: c.decision.occurredAt,
+      author: decision.actor ?? (typeof p["author"] === "string" ? p["author"] : null),
+      date: decision.occurredAt,
     },
-    files: c.decision.files ?? [],
+    files: decision.files ?? [],
   };
 }
 

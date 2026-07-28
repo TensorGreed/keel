@@ -55,7 +55,7 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
-                    select_tests, preflight, why, get_history)
+                    select_tests, preflight, why, verdict, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
@@ -70,6 +70,9 @@ src/
   retrieval/        Decision index: embed.ts (local embeddings, injectable),
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
                     composition — file links + semantic/keyword, human overrides, receipts)
+  trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
+                    machine-checkable facts), policy.ts (keel.policy.json, pure eval +
+                    glob), verdict.ts (pass/warn/block with audited reasons). No model calls.
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
@@ -109,5 +112,11 @@ it has mined (any outcome) so a re-run only touches new or changed PRs and never
 the model for a no-decision PR. Model calls happen only here (offline) plus a local query
 embedding in the server. The `why` MCP tool answers "why is this like this?" for a file or
 question, linking decisions through the graph with PR source receipts; `keel decision
-add`/`reject` gives humans an override that outranks or suppresses mined records. Next is
-Phase 3 (trust layer) — see `docs/roadmap.md` and pick up the first unchecked item.
+add`/`reject` gives humans an override that outranks or suppresses mined records.
+
+Phase 3 (trust layer) is underway. The `verdict` MCP tool composes the earlier facts —
+blast radius, the executed preflight sim, uncovered changes, and decisions the change may
+affect — and evaluates them against `keel.policy.json` (conservative defaults if absent) to
+return a machine-checkable pass | warn | block, each reason naming the exact rule and fact
+that triggered it. Pure evaluation, no model calls (`src/trust/`). Remaining Phase 3 work:
+wiring the verdict into a GitHub check, and a Claude Code hook recipe — see `docs/roadmap.md`.
