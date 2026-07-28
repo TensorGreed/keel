@@ -11,6 +11,7 @@ import * as path from "node:path";
 export const IGNORED_DIRS = new Set([
   "node_modules", ".git", "dist", "build", "coverage", ".next", "out",
   "venv", ".venv", "__pycache__", ".tox", "site-packages",
+  "vendor", "testdata", // Go: vendored deps and test-only data are never part of the graph
 ]);
 
 /** An absolute path as a repo-relative posix path — the form every graph key uses. */

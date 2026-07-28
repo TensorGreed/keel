@@ -10,16 +10,19 @@
 import type { LanguageScanner } from "./scanner.js";
 import { createTypeScriptScanner, TS_EXTENSIONS } from "./typescript-scanner.js";
 import { createPythonScanner, initPythonScanner, PYTHON_EXTENSIONS } from "./python-scanner.js";
+import { createGoScanner, GO_EXTENSIONS, initGoScanner } from "./go-scanner.js";
 
 /** Every extension any scanner owns — the set the composer treats as graph source files. */
-export const GRAPH_EXTENSIONS: ReadonlySet<string> = new Set([...TS_EXTENSIONS, ...PYTHON_EXTENSIONS]);
+export const GRAPH_EXTENSIONS: ReadonlySet<string> = new Set([...TS_EXTENSIONS, ...PYTHON_EXTENSIONS, ...GO_EXTENSIONS]);
 
 /** Fresh scanner instances for a repo (each may hold per-repo resolution state). */
 export function createScanners(root: string): LanguageScanner[] {
-  return [createTypeScriptScanner(root), createPythonScanner(root)];
+  return [createTypeScriptScanner(root), createPythonScanner(root), createGoScanner(root)];
 }
 
-/** One-time async setup any scanner needs (the Python WASM runtime). Idempotent. */
+/** One-time async setup the tree-sitter scanners need (Python + Go WASM runtimes). Idempotent.
+ *  Sequenced, not concurrent: both grammars load into web-tree-sitter's single shared WASM heap,
+ *  and loading two at once races on that memory (a grammar can come back with a corrupt version). */
 export function initGraphScanners(): Promise<void> {
-  return initPythonScanner();
+  return initPythonScanner().then(() => initGoScanner());
 }

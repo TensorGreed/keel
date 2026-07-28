@@ -30,16 +30,30 @@ Edges: imports, calls, reads/writes, exposes.
   monorepo workspaces.
 - **v2 (now):** a language-agnostic composer over a `LanguageScanner` seam
   (`src/graph/scanner.ts`). Each scanner owns a set of extensions and answers two questions
-  about a file — parse (imports + symbols + exports) and resolve (specifier → in-repo file).
-  TypeScript is the compiler-API scanner; **Python** is a tree-sitter scanner using
-  web-tree-sitter (WASM, so `npm install` compiles nothing; the grammar ships as an asset).
-  The graph is persisted incrementally, keyed by git HEAD.
+  about a file — parse (imports + symbols + exports) and resolve (specifier → in-repo file(s)).
+  TypeScript is the compiler-API scanner; **Python** and **Go** are tree-sitter scanners using
+  web-tree-sitter (WASM, so `npm install` compiles nothing; the grammars ship as assets). The
+  graph is persisted incrementally, keyed by git HEAD.
 
-**Multi-language, one graph — no cross-language edges yet.** A repo's TS and Python files live
-in the same graph and coexist, but keel does not model edges *between* languages (e.g. a Python
-service shelling out to a Node script, or an FFI boundary). That's honest: such edges aren't
-import edges and inferring them reliably is future work. Within each language the graph is
-complete; across languages, files simply sit side by side.
+**Go resolves to packages, not files — so `resolveImport` returns a set.** TS and Python both
+import a single file; Go imports a *package*, which is a directory, and a package's non-test
+`.go` files form one compilation unit. So a Go import edge goes from the importing file to
+**every non-test `.go` file of the imported package dir** — the seam's `resolveImport` returns
+`string | string[] | null` for exactly this, and the composer draws an edge to each resolved
+file. Resolution maps an import path to a repo dir through each `go.mod`'s `module` path (a
+`go.work` workspace is just several such modules, all discovered); `vendor/` and `testdata/` are
+excluded. `internal/` needs no special case — visibility is a compiler concern, and the import
+edge is real either way. Exports are the capitalized top-level funcs/types/vars/consts, and a
+method attributes to its receiver type's name. A same-package `_test.go` file compiles with the
+package but imports nothing from it, so the scanner adds a synthetic edge to the package's
+non-test files; a black-box `pkg_test` file connects through its explicit import. Aliased and
+dot-imports pull the whole package (`*`); a blank import (`_`) is a side-effect-only edge.
+
+**Multi-language, one graph — no cross-language edges yet.** A repo's TS, Python, and Go files
+live in the same graph and coexist, but keel does not model edges *between* languages (e.g. a
+Python service shelling out to a Node script, or an FFI boundary). That's honest: such edges
+aren't import edges and inferring them reliably is future work. Within each language the graph
+is complete; across languages, files simply sit side by side.
 
 **Execution now covers TS/JS and Python.** Graph analysis, impact, and test selection are
 language-agnostic (`test_*.py` / `*_test.py` / `tests/` selection for Python). The sandbox

@@ -7,6 +7,7 @@ import { dirname } from "node:path";
 const assets = [
   ["src/events/schema.sql", "dist/events/schema.sql"],
   ["src/graph/wasm/tree-sitter-python.wasm", "dist/graph/wasm/tree-sitter-python.wasm"],
+  ["src/graph/wasm/tree-sitter-go.wasm", "dist/graph/wasm/tree-sitter-go.wasm"],
 ];
 
 for (const [src, dest] of assets) {

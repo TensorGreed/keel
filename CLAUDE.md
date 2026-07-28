@@ -199,6 +199,18 @@ parses the JUnit report with the `keel ci` parser. When pytest isn't installed f
 interpreter, `preflight` returns a distinct `runner-unavailable` status naming it (and `verdict`
 warns) rather than pretending.
 
+**Go graph analysis** is done (`graph/go-scanner.ts`, a third web-tree-sitter scanner behind the
+same seam). Go's model differs in one important way: an import targets a *package* — a directory —
+not a file, and a package's non-test `.go` files are one compilation unit. So a Go import edge
+goes to *every* non-test `.go` file of the imported package dir; `resolveImport` returns
+`string | string[] | null` for this (TS/Python still return one file). Single/factored imports,
+aliases, dot-imports (→ `*`) and blank imports (side-effect edge) are parsed; exports are the
+capitalized top-level funcs/types/vars/consts with methods attributed to their receiver type;
+resolution maps import paths to dirs via each `go.mod`'s module path (`go.work` workspaces =
+several discovered modules), excluding `vendor/`/`testdata/` (`internal/` needs no special case).
+A same-package `_test.go` file gets a synthetic edge to its package's non-test files; a black-box
+`pkg_test` file connects through its explicit import — so a change to a package selects both.
+
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`
 events — idempotent, and a re-run that flips on the same commit is a distinct observation.

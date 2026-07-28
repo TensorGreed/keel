@@ -84,6 +84,16 @@ Goal: the same substrate over more languages, more sources, and more than one re
   - [x] pytest sandbox runner: preflight EXECUTES Python (reuses the repo venv, PYTHONPATH to the
         worktree, JUnit parsed by the `keel ci` parser); pytest absent → `runner-unavailable`
         naming the interpreter, never a crash
+- [ ] Go support: tree-sitter-go (WASM, zero-build) graph extraction + `go test` execution,
+      behind the LanguageScanner seam
+  - [x] Go scanner: imports target PACKAGES (dirs) → an edge to every non-test .go file of the
+        package (one compilation unit); single/factored imports, aliases, dot (→ "*") and blank
+        (side-effect) imports; exports = capitalized top-level funcs/types/vars/consts, methods
+        attributed to their receiver type; resolution via go.mod module path + go.work
+        workspaces; vendor/ and testdata/ excluded
+  - [ ] Go test runner: select _test.go (same-package + black-box) via the dependents walk, run
+        `go test -json` per package in the sandbox worktree; a compile error IS the executed
+        result (surfaced as a failure); go absent → `runner-unavailable`
 - [x] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
   - [x] CI connector: `keel ci` ingests JUnit reports into ci_run events (universal, no deps,

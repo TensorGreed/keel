@@ -107,16 +107,20 @@ function scanFile(byExtension: Map<string, LanguageScanner>, root: string, absFi
   const imports = new Set<string>();
   const importSymbols = new Map<string, Set<string>>();
   for (const { specifier, symbols } of result.imports) {
-    const target = scanner.resolveImport(specifier, absFile);
-    if (!target) continue;
-    const rel = toRepoRelative(root, target);
-    imports.add(rel);
-    let set = importSymbols.get(rel);
-    if (!set) {
-      set = new Set();
-      importSymbols.set(rel, set);
+    const resolved = scanner.resolveImport(specifier, absFile);
+    if (!resolved) continue;
+    // A specifier resolves to one file (TS/Python) or many (a Go package's files). Edge to each.
+    for (const target of Array.isArray(resolved) ? resolved : [resolved]) {
+      const rel = toRepoRelative(root, target);
+      if (rel === toRepoRelative(root, absFile)) continue; // never a self-edge
+      imports.add(rel);
+      let set = importSymbols.get(rel);
+      if (!set) {
+        set = new Set();
+        importSymbols.set(rel, set);
+      }
+      for (const symbol of symbols) set.add(symbol);
     }
-    for (const symbol of symbols) set.add(symbol);
   }
   return { imports, importSymbols, exports: result.exports };
 }

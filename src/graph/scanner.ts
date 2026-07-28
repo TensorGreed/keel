@@ -32,7 +32,11 @@ export interface LanguageScanner {
   readonly extensions: ReadonlySet<string>;
   /** parse a file's content into its imports (with symbols) and exports. Pure — no I/O. */
   scanFile(absFile: string, content: string): FileScanResult;
-  /** resolve a specifier written in `fromFile` to an absolute in-repo source file, or null
-   *  when it points outside the repo / at a third-party package / can't be resolved. */
-  resolveImport(specifier: string, fromFile: string): string | null;
+  /**
+   * Resolve a specifier written in `fromFile` to the in-repo source file(s) it targets, or null
+   * when it points outside the repo / at a third-party package / can't be resolved. Most languages
+   * import a single file (return a string); Go imports a PACKAGE — a directory — so it returns
+   * every non-test file of that package (an array). An edge is drawn to each.
+   */
+  resolveImport(specifier: string, fromFile: string): string | string[] | null;
 }
