@@ -11,6 +11,36 @@ import * as path from "node:path";
 const CONFIG_FILE = ".mcp.json";
 const DEFAULT_SERVER_NAME = "keel";
 const DEFAULT_COMMAND = "keel";
+/** The published package name (`keel` is taken on npm), used for the npx fallback command. */
+const PUBLISHED_NAME = "@tensorgreed/keel";
+
+/** Is `name` a runnable executable on the current PATH? Dependency-free; Windows-aware. */
+function isExecutableOnPath(name: string): boolean {
+  const dirs = (process.env["PATH"] ?? "").split(path.delimiter).filter(Boolean);
+  const exts = process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      try {
+        fs.accessSync(path.join(dir, name + ext), fs.constants.X_OK);
+        return true;
+      } catch {
+        // not here; keep looking
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * The command to launch keel when the user doesn't pass --command. Prefer the bare `keel`
+ * binary if it's on PATH; otherwise fall back to `npx -y <published-name>`, which fetches and
+ * runs the package on demand — no global install required. Detected, never assumed.
+ */
+export function detectDefaultCommand(): { command: string; onPath: boolean } {
+  return isExecutableOnPath(DEFAULT_COMMAND)
+    ? { command: DEFAULT_COMMAND, onPath: true }
+    : { command: `npx -y ${PUBLISHED_NAME}`, onPath: false };
+}
 
 export interface McpServerEntry {
   command: string;
@@ -104,7 +134,8 @@ Usage: keel init [dir] [--name <name>] [--command <cmd>]
 
   dir              project directory to write .mcp.json into (default: KEEL_REPO or cwd)
   --name <name>    server key under mcpServers (default: keel)
-  --command <cmd>  executable the client runs to launch keel (default: keel)
+  --command <cmd>  command the client runs to launch keel
+                   (default: "keel" if on PATH, else "npx -y ${PUBLISHED_NAME}")
 
 Merges into an existing .mcp.json without touching other servers; safe to re-run.`;
 
@@ -140,10 +171,22 @@ export function runInit(argv: string[]): number {
     }
   }
 
+  // Resolve the command up front so we can tell the user exactly which one we wrote and why.
+  let effectiveCommand = command;
+  let autoNote: string | undefined;
+  if (effectiveCommand === undefined) {
+    const detected = detectDefaultCommand();
+    effectiveCommand = detected.command;
+    autoNote = detected.onPath
+      ? `note: wrote "${detected.command}" — it must stay on the client's PATH; pass --command to override.`
+      : `note: "${DEFAULT_COMMAND}" isn't on PATH, so I wrote "${detected.command}" (npx fetches the published package on demand). ` +
+        `Pass --command to override — e.g. --command "node ./dist/index.js" for a local build.`;
+  }
+
   const result = initMcpConfig({
     dir: dir ?? process.env["KEEL_REPO"] ?? process.cwd(),
     ...(serverName !== undefined ? { serverName } : {}),
-    ...(command !== undefined ? { command } : {}),
+    command: effectiveCommand,
   });
   if ("error" in result) {
     console.error(`[keel] init failed: ${result.error}`);
@@ -158,8 +201,6 @@ export function runInit(argv: string[]): number {
     `[keel] ${result.action} ${result.path} — registered "${result.serverName}" ` +
       `(command: ${result.entry.command}). Restart your MCP client to pick it up.`,
   );
-  if (result.entry.command === DEFAULT_COMMAND) {
-    console.log(`[keel] note: "${DEFAULT_COMMAND}" must be on the client's PATH; pass --command to override.`);
-  }
+  if (autoNote) console.log(`[keel] ${autoNote}`);
   return 0;
 }
