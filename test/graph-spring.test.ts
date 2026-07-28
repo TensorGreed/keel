@@ -1,0 +1,61 @@
+import { beforeAll, describe, expect, it } from "vitest";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { buildFileGraph, reportFor, transitiveDependents, type FileGraph } from "../src/graph/dependencies.js";
+import { initGraphScanners } from "../src/graph/scanners.js";
+
+// Spring DI edges: the runtime wiring imports can't express. The fixture puts the injected
+// implementations in a different package from the injector, importing only the interface — so any
+// injector→impl edge here is one imports alone would miss. Deterministic; no build tool needed.
+const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+const M = "src/main/java/com/example";
+
+describe("spring DI edges", () => {
+  let g: FileGraph;
+  beforeAll(async () => {
+    await initGraphScanners();
+    g = buildFileGraph(path.join(fixtures, "java-spring"));
+  });
+
+  it("wires an injected interface to every implementation (invisible to imports)", () => {
+    // OrderService injects the PaymentGateway interface via its constructor; it imports the
+    // interface, NOT the impls — yet Spring wires both StripeGateway and PaypalGateway.
+    const deps = reportFor(g, `${M}/app/OrderService.java`).dependencies;
+    expect(deps).toContain(`${M}/impl/StripeGateway.java`);
+    expect(deps).toContain(`${M}/impl/PaypalGateway.java`);
+    // Proof it isn't just an import edge: OrderService never imports the impls.
+    expect(deps).toContain(`${M}/api/PaymentGateway.java`); // it DOES import the interface
+  });
+
+  it("wires an injected @Bean-produced type to the @Configuration that produces it", () => {
+    // OrderService injects Ledger; Ledger is produced by AppConfig's @Bean method, so the runtime
+    // dependency is on AppConfig — which OrderService does not import.
+    expect(reportFor(g, `${M}/app/OrderService.java`).dependencies).toContain(`${M}/config/AppConfig.java`);
+    expect(reportFor(g, `${M}/config/AppConfig.java`).dependents).toContain(`${M}/app/OrderService.java`);
+  });
+
+  it("wires an @Autowired field to its component", () => {
+    expect(reportFor(g, `${M}/app/OrderService.java`).dependencies).toContain(`${M}/audit/AuditLog.java`);
+  });
+
+  it("puts an implementation in the injector's blast radius (so a change selects its test)", () => {
+    // Change StripeGateway → OrderService (DI) → OrderServiceTest (same-package adjacency). This is
+    // the whole point: a test of the service is selected when a wired-in impl changes.
+    const radius = transitiveDependents(g, `${M}/impl/StripeGateway.java`);
+    expect(radius).toContain(`${M}/app/OrderService.java`);
+    expect(radius).toContain("src/test/java/com/example/app/OrderServiceTest.java");
+  });
+
+  it("does not invent DI edges from a bean it does not inject", () => {
+    // AuditLog injects nothing, so it depends on no bean (its only edges would be real imports).
+    expect(reportFor(g, `${M}/audit/AuditLog.java`).dependencies).toEqual([]);
+  });
+
+  it("draws no DI edges in a repo with no Spring beans", () => {
+    // The plain Maven fixture has no stereotypes — the enrichment runs but adds nothing.
+    const plain = buildFileGraph(path.join(fixtures, "java-maven"));
+    expect(reportFor(plain, `${M}/app/Service.java`).dependencies).not.toContain(`${M}/util/Helper.java.di`);
+    // Service's deps are exactly its imports + same-package adjacency, unchanged by the DI pass.
+    expect(reportFor(plain, `${M}/util/Helper.java`).dependencies).toEqual([`${M}/util/Constants.java`]);
+  });
+});

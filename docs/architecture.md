@@ -64,9 +64,24 @@ directory under a discovered source root — the Maven/Gradle `src/main/java` an
 convention, with multi-module builds discovered from pom.xml `<modules>` and settings.gradle
 `include(...)` (extracted at the regex level; keel takes no XML or build-DSL dependency). Modelling
 same-package files as one unit is honest about what Java source expresses, rather than faking a
-file-level precision the language doesn't give at the package boundary. (Spring DI wiring between
-beans is real coupling that *isn't* an import edge either — that's a separate next pass, not
-modelled yet.)
+file-level precision the language doesn't give at the package boundary.
+
+**Spring DI edges — the runtime wiring imports can't express** (`src/graph/spring.ts`). Spring's
+most valuable coupling is invisible to imports: a `@Service` that injects a `PaymentGateway`
+*interface* imports the interface, never the concrete `StripeGateway` bean Spring wires in at
+runtime — yet changing that impl changes the service. So a Java-only graph-enrichment pass reads the
+beans (stereotype annotations), their injection points (constructor params, `@Autowired`
+fields/setters, Lombok-generated constructors, `@Bean` method params), and the interface/superclass
+each bean implements, then adds an edge from each injecting bean to every bean that could satisfy the
+injection — an interface's implementations, a concrete bean of the type, or the `@Configuration` that
+produces it via a `@Bean` method. It's deterministic static analysis, never a guess (principle 2).
+Resolution is by simple type name — a deliberate, conservative over-approximation: a cross-package
+name collision can only *add* edges, and blast radius is already a safe over-approximation (a
+superset of tests is fine; a missed one is not). Because these edges are inherently cross-file (an
+impl in file A reroutes an injector in file B), the pass runs only in a full `buildFileGraph`; any
+`.java` change forces a full rebuild rather than an incremental update, which keeps the cache
+provably correct (see `graph/cache.ts`). Bean field/setter *interface* injection is where this earns
+its keep — the edge no import carries.
 
 **Multi-language, one graph — no cross-language edges yet.** A repo's TS, Python, Go, and Java
 files live in the same graph and coexist, but keel does not model edges *between* languages (e.g. a

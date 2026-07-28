@@ -148,6 +148,9 @@ function classifyChanges(root: string, cached: FileGraph, changed: Set<string>):
   for (const p of changed) {
     if (isConfigPath(p)) return null; // resolver semantics may have changed repo-wide
     if (!isGraphSourcePath(p)) continue;
+    // Spring DI edges are cross-file (an impl's change reroutes an injector elsewhere), so a Java
+    // change can't be applied per-file — force a full rebuild that recomputes the DI overlay.
+    if (p.endsWith(".java")) return null;
     const existsNow = isFile(path.resolve(root, p));
     const inCache = cachedFiles.has(p);
     if (existsNow && inCache) modified.push(p);

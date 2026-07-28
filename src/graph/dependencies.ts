@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { IGNORED_DIRS, toRepoRelative } from "./shared.js";
 import type { LanguageScanner } from "./scanner.js";
 import { createScanners, GRAPH_EXTENSIONS } from "./scanners.js";
+import { applySpringEdges, javaFiles } from "./spring.js";
 
 export interface FileGraph {
   /** file -> files it imports (repo-relative posix paths) */
@@ -159,6 +160,12 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     exportsOf.set(rel, scan.exports);
   }
 
+  // Spring DI enrichment: add the runtime wiring edges imports can't express (interface →
+  // implementation, @Bean factories). Cross-file by nature, so it runs once here on the full graph;
+  // a Java change forces a full rebuild rather than an incremental update (see graph/cache.ts).
+  const java = javaFiles(relFiles);
+  if (java.length > 0) applySpringEdges(root, java, imports, importSymbols);
+
   return {
     imports,
     importedBy: invertImports(imports),
@@ -174,6 +181,11 @@ export function buildFileGraph(repoRoot: string): FileGraph {
  * Under those conditions this is provably identical to a full buildFileGraph: an
  * unchanged file's edges depend on its own content, the resolver, and which files exist,
  * none of which moved, so only the modified files need rescanning.
+ *
+ * Exception: Spring DI edges are cross-file (an impl's file changes an injector's edges), so
+ * a `.java` change breaks that assumption — the cache layer forces a full rebuild in that case
+ * and never routes a Java change here. Non-Java changes leave the (Java-only) DI edges untouched,
+ * so the invariant holds and the preserved base DI edges stay correct.
  */
 export function updateFileGraph(
   repoRoot: string,
@@ -250,9 +262,10 @@ export function isGraphSourcePath(relPosixPath: string): boolean {
   return GRAPH_EXTENSIONS.has(path.posix.extname(relPosixPath));
 }
 
-/** On-disk graph format; bump when the serialized shape changes so stale caches are dropped.
- *  v2: multi-language graphs (a v1 cache was TS/JS-only) — bumping invalidates them cleanly. */
-export const GRAPH_FORMAT_VERSION = 2;
+/** On-disk graph format; bump when the serialized shape changes OR when the edges a build produces
+ *  change, so stale caches are dropped. v2: multi-language graphs (v1 was TS/JS-only). v3: Spring DI
+ *  edges (a v2 cache lacks them) — bumping invalidates cleanly. */
+export const GRAPH_FORMAT_VERSION = 3;
 
 export interface SerializedFileGraph {
   version: number;

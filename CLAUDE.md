@@ -242,8 +242,19 @@ Surefire / Gradle JUnit XML via the existing `keel ci` parser, each failure attr
 file by `classname`. A compile error IS the executed result (a failure with the compiler output,
 same rule as Go); no build tool → `runner-unavailable`; a toolchain/dependency fault →
 `environment-error`. Runner dispatch in `runSandbox` is now `isPythonTest` → pytest, `isGoTest` →
-`go test`, `isJavaTest` → mvn/gradle, else the JS runners. Spring DI edges between beans are real
-non-import coupling, deferred to a separate next pass.
+`go test`, `isJavaTest` → mvn/gradle, else the JS runners.
+
+**Spring DI edges** are done (`graph/spring.ts`), a Java-only graph-enrichment pass adding the
+runtime wiring imports can't express: a bean that injects an *interface* imports the interface, not
+the concrete bean Spring wires in, so an import-only graph misses it. The pass reads beans
+(stereotype annotations), injection points (constructor params, `@Autowired` fields/setters,
+Lombok-generated constructors, `@Bean` method params), and each bean's interfaces/superclass, then
+edges each injector to every satisfying bean — an interface's impls, a concrete bean, or the
+`@Configuration` producing it via `@Bean`. Deterministic; resolution is by simple type name (a
+conservative over-approximation — a collision only *adds* edges, safe for blast radius). These edges
+are cross-file (an impl reroutes an injector elsewhere), so they compute only in a full
+`buildFileGraph`; any `.java` change forces a full rebuild rather than an incremental update, keeping
+the cache correct. Graph format bumped to v3 (a v2 cache lacked DI edges).
 
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`

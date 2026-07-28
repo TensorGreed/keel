@@ -42,9 +42,10 @@ pytest in the sandbox (reusing the repo's venv). Where pytest isn't installed, i
 packages: an edge to every non-test `.go` file, resolved via `go.mod`/`go.work`) and **execution**
 (`preflight` runs `go test -json` per package in the sandbox; a compile error surfaces as a failure
 with the compiler output). **Java** works too — graph analysis (a package is one unit: same-package
-types couple with no import, incl. `src/test/java` ↔ `src/main/java`) and **execution** (`preflight`
-runs the selected classes under `mvn`/`gradle`, preferring the wrapper; a compile error surfaces as
-a failure). Working today:
+types couple with no import, incl. `src/test/java` ↔ `src/main/java`; plus **Spring DI edges** — an
+injected interface links to every implementation Spring wires in, which imports never show) and
+**execution** (`preflight` runs the selected classes under `mvn`/`gradle`, preferring the wrapper; a
+compile error surfaces as a failure). Working today:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)
