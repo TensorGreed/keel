@@ -247,11 +247,20 @@ function resolveModulePath(baseDir: string, parts: string[]): string | null {
   return null; // plain module / regular package not found (namespace package has no file)
 }
 
-/** Extra module roots for a src/ layout, when pyproject.toml or setup.cfg declares one. */
+/**
+ * Repo-level module roots for absolute imports, most-specific first:
+ *   - a configured src root (pyproject/setup.cfg package-dir/where = src), then
+ *   - src/ as a root *by convention* whenever it holds package dirs — flit/hatch/setuptools
+ *     auto-detect a src layout from the directory shape with no package-dir config at all
+ *     (this is exactly pallets/flask: `src/flask/` and a bare pyproject), then
+ *   - the repo root, last.
+ * The importing file's own package tree is tried before any of these (see resolvePythonImport).
+ */
 function detectRoots(repoRoot: string): string[] {
-  const roots = [repoRoot];
+  const roots: string[] = [];
   const srcDir = path.join(repoRoot, "src");
-  if (isDir(srcDir) && declaresSrcLayout(repoRoot)) roots.push(srcDir);
+  if (isDir(srcDir) && (declaresSrcLayout(repoRoot) || srcHoldsPackages(srcDir))) roots.push(srcDir);
+  roots.push(repoRoot);
   return roots;
 }
 
@@ -272,6 +281,31 @@ function declaresSrcLayout(repoRoot: string): boolean {
   return false;
 }
 
+/** Does src/ hold at least one regular package (a subdir with __init__.py)? The src-layout
+ *  convention build backends auto-detect, present regardless of any package-dir config. */
+function srcHoldsPackages(srcDir: string): boolean {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(srcDir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  return entries.some((e) => e.isDirectory() && !e.name.startsWith(".") && isFile(path.join(srcDir, e.name, "__init__.py")));
+}
+
+/** The directory that would sit on sys.path for `fromFile`: climb out of its package (ancestors
+ *  with __init__.py) to the first non-package dir. An absolute import from inside a package
+ *  resolves against that root first. */
+function packageTreeRoot(fromFile: string): string {
+  let dir = path.dirname(fromFile);
+  while (isFile(path.join(dir, "__init__.py"))) {
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return dir;
+}
+
 /** In-repo and not inside an ignored/virtualenv dir. */
 function inRepoSource(repoRoot: string, file: string): boolean {
   if (!file.startsWith(repoRoot + path.sep)) return false;
@@ -285,7 +319,12 @@ function resolvePythonImport(repoRoot: string, roots: string[], specifier: strin
   const { level, parts } = parseSpec(specifier);
 
   if (level === 0) {
-    for (const root of roots) {
+    // The importing file's own package tree first, then the repo-level roots (configured src,
+    // src-by-convention, repo root). Dedup so a shared root isn't probed twice.
+    const seen = new Set<string>();
+    for (const root of [packageTreeRoot(fromFile), ...roots]) {
+      if (seen.has(root)) continue;
+      seen.add(root);
       const file = resolveModulePath(root, parts);
       if (file && inRepoSource(repoRoot, file)) return file;
     }

@@ -187,7 +187,9 @@ Phase 5 (widen) is underway. Item 1, **Python graph analysis**, is done. The gra
 a language-agnostic composer over a `LanguageScanner` seam (`graph/scanner.ts`): TypeScript is the
 compiler-API scanner, Python is a web-tree-sitter (WASM) scanner whose grammar ships as an asset
 (zero-build install). Python imports (absolute/relative/star), module resolution (packages, src/
-layouts, namespace packages), and exports (def/class/assign, `__all__`) are supported; the cache
+layouts by config OR convention — src/<pkg> is a root whenever it holds packages, matching flit/
+hatch auto-detection — namespace packages), and exports (def/class/assign, `__all__`) are
+supported; the cache
 (format v2) holds mixed TS+Python repos in one graph — with **no cross-language edges yet** (files
 coexist; that's honest, see docs/architecture.md). `get_dependencies`/`get_impact`/`select_tests`
 work on Python (`test_*.py`/`*_test.py`/`tests/` selection); the sandbox sim runner stays TS/JS-only,

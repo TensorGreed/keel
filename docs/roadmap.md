@@ -76,8 +76,9 @@ Goal: the same substrate over more languages, more sources, and more than one re
 - [x] Python support: tree-sitter (web-tree-sitter WASM) graph extraction alongside the TS
       compiler API, behind a LanguageScanner seam
   - [x] Language seam: LanguageScanner interface; the TS builder moved behind it (pure refactor)
-  - [x] Python scanner: imports (abs/relative/star), resolution (packages, src/ layouts,
-        namespace packages), exports (def/class/assign, __all__); zero-build WASM grammar
+  - [x] Python scanner: imports (abs/relative/star), resolution (packages, src/ layouts by
+        config OR convention — the importing file's package tree, then src/<pkg>, then repo
+        root, namespace packages last), exports (def/class/assign, __all__); zero-build WASM grammar
   - [x] Multi-language cache + mixed TS+Python repos (one graph, no cross-language edges yet);
         get_dependencies/get_impact/select_tests work on Python; sim runner stays TS/JS-only
         (preflight returns `runner-unsupported` for Python rather than pretending)
