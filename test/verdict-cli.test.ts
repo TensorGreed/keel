@@ -163,4 +163,28 @@ describe("runVerdict (keel verdict CLI)", () => {
     expect(code).toBe(0);
     expect(out.join("")).toContain("keel verdict");
   });
+
+  it("--github-check without a token errors (exit 1) on an otherwise-passing verdict", async () => {
+    const hadToken = process.env["GITHUB_TOKEN"];
+    delete process.env["GITHUB_TOKEN"];
+    try {
+      const code = await runVerdict(["--github-check", "--diff-file", diffPath("benign.diff")]);
+      expect(code).toBe(1); // the requested publish failed, so the run is an error
+      expect(err.join("")).toContain("github check: no GITHUB_TOKEN");
+    } finally {
+      if (hadToken !== undefined) process.env["GITHUB_TOKEN"] = hadToken;
+    }
+  }, 30_000);
+
+  it("--github-check lets a block outrank a publish failure (exit 2)", async () => {
+    const hadToken = process.env["GITHUB_TOKEN"];
+    delete process.env["GITHUB_TOKEN"];
+    try {
+      const code = await runVerdict(["--github-check", "--diff-file", diffPath("breaking.diff")]);
+      expect(code).toBe(2); // block dominates the publish error
+      expect(err.join("")).toContain("verdict: BLOCK");
+    } finally {
+      if (hadToken !== undefined) process.env["GITHUB_TOKEN"] = hadToken;
+    }
+  }, 30_000);
 });

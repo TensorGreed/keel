@@ -6,20 +6,29 @@
  * Exit codes let simple gating work without parsing: 0 = pass or warn, 2 = block, 1 = error.
  * `--hook` reads the Claude Code Stop-hook payload on stdin and emits its control JSON on
  * stdout — block the agent from finishing on a failing verdict (see recipes/claude-code-hook.md).
+ * `--github-check` additionally publishes the verdict as a GitHub check run (recipes/github-check.md).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
+import { FetchGitHubClient } from "../github/client.js";
+import { buildCheckRun, postCheckRun } from "../github/check.js";
+import { resolveHeadSha, resolveRepoRef } from "../github/remote.js";
 import { computeVerdict, type Verdict, type VerdictLevel } from "./verdict.js";
 
 const VERDICT_HELP = `keel verdict — pass | warn | block a change against keel.policy.json
 
-Usage: keel verdict [--diff-file PATH] [--json | --hook] [--max-tests N] [--max-seconds N]
+Usage: keel verdict [--diff-file PATH] [--json | --hook] [--github-check]
+                    [--sha SHA] [--repo owner/repo] [--max-tests N] [--max-seconds N]
 
   --diff-file PATH   judge this unified diff instead of the working tree
   --json             print the full verdict as JSON
   --hook             act as a Claude Code Stop hook: read the event on stdin, emit
                      block JSON on stdout when the verdict is block (honors stop_hook_active)
+  --github-check     also publish the verdict as a GitHub check run (needs GITHUB_TOKEN
+                     with checks:write) — see recipes/github-check.md
+  --sha SHA          commit the check attaches to (default: GITHUB_SHA or git HEAD)
+  --repo owner/repo  repo to post the check to (default: the origin remote)
   --max-tests N      cap tests the sim runs (default 50 / KEEL_MAX_TESTS)
   --max-seconds N    sim wall-time cap in seconds (default 120 / KEEL_MAX_SECONDS)
 
@@ -79,10 +88,36 @@ function stopHookOutput(v: Verdict): string {
   return JSON.stringify({ decision: "block", reason }) + "\n";
 }
 
+/**
+ * Publish the verdict as a GitHub check run. Everything that can go wrong — no token, no
+ * github remote, an unresolvable SHA, an API rejection — comes back as data so the caller
+ * decides the exit code; publishing never throws across the CLI boundary.
+ */
+async function publishCheck(
+  repoRoot: string,
+  verdict: Verdict,
+  opts: { sha?: string; repo?: string },
+): Promise<{ url: string } | { error: string }> {
+  const token = process.env["GITHUB_TOKEN"];
+  if (!token) return { error: "no GITHUB_TOKEN; a token with checks:write is required to publish a check run" };
+
+  const ref = await resolveRepoRef(repoRoot, opts.repo);
+  if ("error" in ref) return { error: ref.error };
+
+  const sha = await resolveHeadSha(repoRoot, opts.sha ?? process.env["GITHUB_SHA"]);
+  if (typeof sha !== "string") return { error: sha.error };
+
+  const posted = await postCheckRun(new FetchGitHubClient(token), ref, buildCheckRun(verdict, sha));
+  return "error" in posted ? posted : { url: posted.url };
+}
+
 export async function runVerdict(argv: string[]): Promise<number> {
   let asJson = false;
   let asHook = false;
+  let githubCheck = false;
   let diffFile: string | undefined;
+  let sha: string | undefined;
+  let repo: string | undefined;
   let maxTests: number | undefined;
   let maxSeconds: number | undefined;
 
@@ -94,15 +129,17 @@ export async function runVerdict(argv: string[]): Promise<number> {
     }
     if (arg === "--json") asJson = true;
     else if (arg === "--hook") asHook = true;
-    else if (arg === "--diff-file" || arg === "--max-tests" || arg === "--max-seconds") {
+    else if (arg === "--github-check") githubCheck = true;
+    else if (arg === "--diff-file" || arg === "--sha" || arg === "--repo" || arg === "--max-tests" || arg === "--max-seconds") {
       const value = argv[++i];
       if (value === undefined) {
         warn(`verdict: ${arg} needs a value`);
         return 1;
       }
-      if (arg === "--diff-file") {
-        diffFile = value;
-      } else {
+      if (arg === "--diff-file") diffFile = value;
+      else if (arg === "--sha") sha = value;
+      else if (arg === "--repo") repo = value;
+      else {
         const n = Number(value);
         if (!Number.isFinite(n) || n <= 0) {
           warn(`verdict: ${arg} must be a positive integer, got "${value}"`);
@@ -154,9 +191,21 @@ export async function runVerdict(argv: string[]): Promise<number> {
       if (result.verdict !== "pass") printSummary(result); // surface warns/blocks on stderr
       return exitCodeFor(result.verdict);
     }
+
+    let exit = exitCodeFor(result.verdict);
+    if (githubCheck) {
+      const published = await publishCheck(repoRoot, result, { ...(sha !== undefined ? { sha } : {}), ...(repo !== undefined ? { repo } : {}) });
+      if ("error" in published) {
+        warn(`github check: ${published.error}`);
+        if (exit === 0) exit = 1; // a failed publish is an error — unless a block already dominates
+      } else {
+        warn(`published check run: ${published.url}`);
+      }
+    }
+
     if (asJson) console.log(JSON.stringify(result, null, 2));
     else printSummary(result);
-    return exitCodeFor(result.verdict);
+    return exit;
   } finally {
     store.close();
   }

@@ -92,6 +92,11 @@ class FakeGitHubClient implements GitHubClient {
     }
     return respond([]);
   }
+
+  // ingestion never writes; present only to satisfy the GitHubClient contract.
+  post<T>(): Promise<GitHubResponse<T>> {
+    throw new Error("FakeGitHubClient.post is not used by ingestion");
+  }
 }
 
 const REF = { owner: "o", repo: "r" };

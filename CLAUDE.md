@@ -63,7 +63,8 @@ src/
                     sandbox.ts (apply diff in a temp worktree, run the tests),
                     preflight.ts (impact -> select -> sandbox, budgeted)
   github/           `keel ingest`: backfill PRs + review threads into the event log
-                    (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps)
+                    (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps);
+                    check.ts publishes a verdict as a GitHub check run (verdict --github-check)
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
                     The one place model calls are allowed — Ollama or batch Haiku,
                     injectable DecisionModel; never reached from the MCP server
@@ -77,7 +78,8 @@ src/
                     No model calls.
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
-recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook)
+recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook;
+                    github-check.md: verdict as a GitHub check on every PR)
 test/               Vitest; fixtures under test/fixtures/
 ```
 
@@ -117,13 +119,15 @@ embedding in the server. The `why` MCP tool answers "why is this like this?" for
 question, linking decisions through the graph with PR source receipts; `keel decision
 add`/`reject` gives humans an override that outranks or suppresses mined records.
 
-Phase 3 (trust layer) is nearly complete. The `verdict` MCP tool composes the earlier facts —
+Phase 3 (trust layer) is complete. The `verdict` MCP tool composes the earlier facts —
 blast radius, the executed preflight sim, uncovered changes, and decisions the change may
 affect — and evaluates them against `keel.policy.json` (conservative defaults if absent) to
 return a machine-checkable pass | warn | block, each reason naming the exact rule and fact
 that triggered it. The same computation is reachable from the shell as `keel verdict`
-(`trust/verdict-cli.ts`): exit codes 0/2/1 for CI gating, `--json` for the full verdict, and
-`--hook`, which speaks the Claude Code Stop-hook protocol (reads the event on stdin, emits
-block JSON on a failing verdict, honors `stop_hook_active`) so an agent can't finish on a
-change that fails policy — see `recipes/claude-code-hook.md`. Pure evaluation, no model calls
-(`src/trust/`). The one remaining Phase 3 item is wiring the verdict into a GitHub check.
+(`trust/verdict-cli.ts`): exit codes 0/2/1 for CI gating, `--json` for the full verdict,
+`--hook` (the Claude Code Stop-hook protocol — reads the event on stdin, emits block JSON on a
+failing verdict, honors `stop_hook_active`; see `recipes/claude-code-hook.md`), and
+`--github-check`, which publishes the verdict as a GitHub check run on the PR head via
+`github/check.ts` (base-checkout + forward-diff recipe in `recipes/github-check.md`). Pure
+evaluation, no model calls (`src/trust/`); the check is ETL plumbing (a REST POST), also no
+model calls.

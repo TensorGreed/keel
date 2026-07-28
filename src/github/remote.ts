@@ -59,3 +59,17 @@ export async function resolveRepoRef(
   const ref = parseRemoteUrl(url);
   return ref ?? { error: `origin remote is not a github.com repo: ${url}` };
 }
+
+/** The commit a check run should attach to: HEAD, unless overridden. Error returned as data. */
+export async function resolveHeadSha(repoRoot: string, override?: string): Promise<string | { error: string }> {
+  if (override !== undefined) {
+    const sha = override.trim();
+    return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : { error: `--sha must be a git SHA, got "${override}"` };
+  }
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+    return stdout.trim();
+  } catch {
+    return { error: "cannot resolve HEAD (no commits yet?); pass --sha" };
+  }
+}

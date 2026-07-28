@@ -47,7 +47,7 @@ Goal: policy verdicts that let agents take bigger changes safely.
 
 - [x] Verdict object: blast radius, sim status, decision conflicts
 - [x] Policy file format (`keel.policy.json`) + evaluator (pure, no model calls)
-- [x] `verdict` MCP tool; GitHub check integration (tool done; GitHub check wiring TODO)
+- [x] `verdict` MCP tool; GitHub check integration (`keel verdict --github-check`, recipes/github-check.md)
 - [x] Claude Code hook recipe: `keel verdict` as a Stop hook (recipes/claude-code-hook.md)
 
 ## Later

@@ -21,6 +21,8 @@ export interface GitHubResponse<T> {
 export interface GitHubClient {
   /** GET an API path (e.g. "/repos/o/r/pulls?...") or a full URL (for pagination). */
   get<T>(path: string): Promise<GitHubResponse<T>>;
+  /** POST a JSON body to an API path (e.g. publishing a check run). */
+  post<T>(path: string, body: unknown): Promise<GitHubResponse<T>>;
   /** whether requests are authenticated (affects rate limits) */
   authenticated: boolean;
 }
@@ -51,7 +53,15 @@ export class FetchGitHubClient implements GitHubClient {
     this.authenticated = Boolean(token);
   }
 
-  async get<T>(path: string): Promise<GitHubResponse<T>> {
+  get<T>(path: string): Promise<GitHubResponse<T>> {
+    return this.request<T>("GET", path);
+  }
+
+  post<T>(path: string, body: unknown): Promise<GitHubResponse<T>> {
+    return this.request<T>("POST", path, body);
+  }
+
+  private async request<T>(method: "GET" | "POST", path: string, body?: unknown): Promise<GitHubResponse<T>> {
     const url = path.startsWith("http") ? path : `${API_BASE}${path}`;
     const headers: Record<string, string> = {
       Accept: "application/vnd.github+json",
@@ -59,10 +69,15 @@ export class FetchGitHubClient implements GitHubClient {
       "X-GitHub-Api-Version": "2022-11-28",
     };
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
+    const init: RequestInit = { method, headers };
+    if (body !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.body = JSON.stringify(body);
+    }
 
     let res: Response;
     try {
-      res = await fetch(url, { headers });
+      res = await fetch(url, init);
     } catch (err) {
       throw new GitHubError(0, `network error contacting GitHub: ${(err as Error).message}`);
     }

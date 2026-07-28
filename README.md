@@ -20,8 +20,8 @@ See [docs/concept.md](docs/concept.md) for the vision and
 
 ## Status
 
-Phases 0–2 complete (substrate, flight simulator, team memory); Phase 3 (trust layer)
-nearly complete. Working today, for TypeScript/JavaScript repos:
+Phases 0–3 complete (substrate, flight simulator, team memory, trust layer). Working today,
+for TypeScript/JavaScript repos:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)
@@ -33,12 +33,13 @@ nearly complete. Working today, for TypeScript/JavaScript repos:
   (`keel ingest` + `keel mine` populate it; `keel decision add`/`reject` for human overrides)
 - `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
   radius, the executed sim, coverage, and affected decisions against `keel.policy.json`.
-  Also runs from the shell as `keel verdict` (exit codes for CI, `--hook` for Claude Code) —
-  gate an agent so it can't finish on a change that fails policy: see
-  [recipes/claude-code-hook.md](recipes/claude-code-hook.md)
+  Also runs from the shell as `keel verdict`: exit codes for CI, `--hook` to gate Claude Code
+  ([recipes/claude-code-hook.md](recipes/claude-code-hook.md)), and `--github-check` to post
+  the verdict as a GitHub check on every PR ([recipes/github-check.md](recipes/github-check.md))
 - `get_history` — git history for any path
 
-See [docs/roadmap.md](docs/roadmap.md) for what's next (the last Phase 3 item: a GitHub check).
+See [docs/roadmap.md](docs/roadmap.md) for what's next (post-Phase-3: more languages,
+cross-repo graphs, CI/Jira/incident connectors).
 
 ## Quick start
 
