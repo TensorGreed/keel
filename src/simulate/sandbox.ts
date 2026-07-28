@@ -47,6 +47,8 @@ export interface TestFailure {
   message: string;
   /** the full error/stack the runner reported, capped; omitted when it adds nothing to message */
   trace?: string;
+  /** "collection-error" for a test file pytest couldn't import/collect (vs a real assertion) */
+  kind?: "collection-error";
 }
 
 export interface SandboxResult {
@@ -178,11 +180,25 @@ function findPythonInterpreter(repoRoot: string): Interpreter {
   return { cmd: "python3", label: "python3" };
 }
 
+/** The concrete exception line from a traceback body (e.g. "ModuleNotFoundError: No module ...").
+ *  pytest colorizes the JUnit longrepr even under --color=no, so strip ANSI before matching. */
+function exceptionLine(details: string | undefined): string | undefined {
+  if (!details) return undefined;
+  const lines = stripAnsi(details).split("\n").map((l) => l.trim().replace(/^E\s+/, "")).filter(Boolean);
+  const exc = [...lines].reverse().find((l) => /^\w*(Error|Exception|Warning):/.test(l));
+  return exc ?? lines.find((l) => /ImportError while importing/.test(l)) ?? lines[0];
+}
+
 /**
- * Normalize a parsed pytest JUnit report into sandbox counts + failures. pytest's default JUnit
- * doesn't emit a per-case `file`, so when it's absent we recover it from the case's classname —
- * whose last segment is the test module's basename — matched against the files we actually ran.
- * That's what lets preflight draw the graph path from the failing test back to the change.
+ * Normalize a parsed pytest JUnit report into sandbox counts + failures. Two things pytest's
+ * JUnit makes us reconstruct:
+ *   - it emits no per-case `file`, so we recover it from the classname (real tests) or the case
+ *     name (collection errors) — both a dotted module path whose last segment is the file's
+ *     basename — matched against the files we actually ran, which is what gives failures a
+ *     graph path back to the change; and
+ *   - a file it couldn't import surfaces as an `<error message="collection failure">` with an
+ *     empty classname. We record those as their own failure records (kind "collection-error",
+ *     the ImportError line as message) so one broken sub-project can't mask the real results.
  */
 function pytestResults(
   xml: string,
@@ -191,10 +207,13 @@ function pytestResults(
 ): { passed: number; failed: number; failures: TestFailure[]; total: number } {
   const byBasename = new Map<string, string>();
   for (const t of ranTests) byBasename.set(path.posix.basename(t).replace(/\.pyi?$/, ""), t);
-  const fileOf = (t: { file?: string; classname?: string }): string | undefined => {
+  const fileOf = (t: { file?: string; classname?: string; name?: string }): string | undefined => {
     if (t.file) return toRepoRel(worktree, t.file);
-    const base = (t.classname ?? "").split(".").pop();
-    return base ? byBasename.get(base) : undefined;
+    for (const src of [t.classname, t.name]) {
+      const base = (src ?? "").split(".").pop();
+      if (base && byBasename.has(base)) return byBasename.get(base);
+    }
+    return undefined;
   };
 
   const report = parseJUnit(xml);
@@ -204,13 +223,20 @@ function pytestResults(
   for (const t of report.tests) {
     if (t.status === "passed") {
       passed++;
-    } else if (t.status === "failed" || t.status === "error") {
-      failed++;
+      continue;
+    }
+    if (t.status === "skipped") continue;
+
+    failed++;
+    const file = fileOf(t);
+    const isCollectionError = t.status === "error" && (!t.classname || t.message === "collection failure");
+    if (isCollectionError) {
+      const message = exceptionLine(t.details) ?? t.message ?? "collection error";
+      failures.push({ name: t.name || "(collection error)", ...(file ? { file } : {}), message, kind: "collection-error" });
+    } else {
       const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
-      const file = fileOf(t);
       failures.push({ name: t.name || "(unnamed test)", ...(file ? { file } : {}), message });
     }
-    // skipped: not a pass or a fail — omitted from both counts
   }
   return { passed, failed, failures, total: report.tests.length };
 }
@@ -279,6 +305,15 @@ function tail(text: string): string | undefined {
   const trimmed = text.trim();
   if (!trimmed) return undefined;
   return trimmed.length > OUTPUT_TAIL ? "…" + trimmed.slice(-OUTPUT_TAIL) : trimmed;
+}
+
+/**
+ * Drop ANSI SGR color codes so captured text stays plain. Matches both a real ESC (in the
+ * output tail) and pytest's JUnit escaping of the illegal ESC byte as the literal `#x1B`
+ * (colorized longreprs still leak into the XML even under --color=no when CI is set).
+ */
+function stripAnsi(text: string): string {
+  return text.replace(/(?:\x1b|#x1[bB];?)\[[0-9;]*m/g, "");
 }
 
 /** Reproduce the main repo's uncommitted state in the worktree: apply tracked changes and
@@ -369,11 +404,18 @@ async function runPytest(
   const junitFile = path.join(parent, "report.xml");
   const proc = await runProcess(
     interpreter.cmd,
-    ["-m", "pytest", ...ranTests, `--junitxml=${junitFile}`, "-p", "no:cacheprovider"], // core pytest, no plugins
+    [
+      "-m", "pytest", ...ranTests,
+      `--junitxml=${junitFile}`,
+      "-p", "no:cacheprovider", // core pytest, no plugins
+      "--continue-on-collection-errors", // one broken sub-project can't abort the whole run
+      "--color=no", // keep the output tail parseable (no ANSI)
+    ],
     { cwd: worktree, timeoutMs, env: { PYTHONPATH: pythonPath } },
   );
 
-  const combined = tail(`${proc.stdout}\n${proc.stderr}`);
+  // Strip ANSI defensively before truncating, so the tail is clean even if a subprocess colorizes.
+  const combined = tail(stripAnsi(`${proc.stdout}\n${proc.stderr}`));
   if (proc.timedOut) {
     return { status: "timed-out", runner: "pytest", ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...cappedField };
   }
@@ -398,11 +440,17 @@ async function runPytest(
           ? "passed"
           : "failed";
 
+  // Never a silent "failed" with no detail: if the run failed but produced no parseable results
+  // (e.g. a fatal conftest ImportError that pytest can't recover from), say the run itself failed
+  // — the cleaned output tail carries the reason.
+  const runFailedNoResults = status === "failed" && (!results || results.total === 0);
+
   return {
     status,
     runner: "pytest",
     ranTests,
     exitCode: proc.code,
+    ...(runFailedNoResults ? { error: `the pytest run failed (exit ${proc.code ?? "?"}) without producing a report — see output` } : {}),
     ...(results ? { passed: results.passed, failed: results.failed, failures: results.failures } : {}),
     ...(combined ? { output: combined } : {}),
     ...cappedField,

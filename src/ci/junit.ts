@@ -17,8 +17,10 @@ export interface TestCaseResult {
   /** wall time in milliseconds, when present */
   timeMs?: number;
   status: TestStatus;
-  /** the failure/error message, when the case didn't pass */
+  /** the failure/error message (the `message` attribute), when the case didn't pass */
   message?: string;
+  /** the failure/error element's text body (stack/traceback), when present */
+  details?: string;
 }
 
 export interface JUnitReport {
@@ -74,9 +76,27 @@ function childMessage(body: string, tag: "failure" | "error"): string | undefine
   return m ? decode(m[1]!) : undefined;
 }
 
-function statusOf(body: string): { status: TestStatus; message?: string } {
-  if (/<failure\b/.test(body)) return { status: "failed", ...(childMessage(body, "failure") ? { message: childMessage(body, "failure") } : {}) };
-  if (/<error\b/.test(body)) return { status: "error", ...(childMessage(body, "error") ? { message: childMessage(body, "error") } : {}) };
+/** The text body of the first `<failure>`/`<error>` element (the stack/traceback), if any.
+ *  pytest puts the ImportError of a collection failure here, not in the message attribute. */
+function childDetails(body: string, tag: "failure" | "error"): string | undefined {
+  const start = body.search(new RegExp(`<${tag}\\b`));
+  if (start < 0) return undefined;
+  const openEnd = tagEnd(body, start);
+  if (openEnd < 0 || /\/\s*>$/.test(body.slice(start, openEnd + 1))) return undefined; // self-closing
+  const close = body.indexOf(`</${tag}>`, openEnd);
+  if (close < 0) return undefined;
+  const inner = body.slice(openEnd + 1, close).trim();
+  return inner ? decode(inner) : undefined;
+}
+
+function statusOf(body: string): { status: TestStatus; message?: string; details?: string } {
+  for (const tag of ["failure", "error"] as const) {
+    if (new RegExp(`<${tag}\\b`).test(body)) {
+      const message = childMessage(body, tag);
+      const details = childDetails(body, tag);
+      return { status: tag === "failure" ? "failed" : "error", ...(message ? { message } : {}), ...(details ? { details } : {}) };
+    }
+  }
   if (/<skipped\b/.test(body)) return { status: "skipped" };
   return { status: "passed" };
 }
@@ -106,7 +126,7 @@ export function parseJUnit(xml: string): JUnitReport {
     const openTag = xml.slice(start, openEnd + 1);
     const attrs = parseAttrs(openTag);
 
-    let result: { status: TestStatus; message?: string } = { status: "passed" };
+    let result: { status: TestStatus; message?: string; details?: string } = { status: "passed" };
     let next = openEnd + 1;
     if (!/\/\s*>$/.test(openTag)) {
       const close = xml.indexOf("</testcase>", openEnd);
@@ -123,6 +143,7 @@ export function parseJUnit(xml: string): JUnitReport {
       ...(time !== undefined && Number.isFinite(time) ? { timeMs: Math.round(time * 1000) } : {}),
       status: result.status,
       ...(result.message ? { message: result.message } : {}),
+      ...(result.details ? { details: result.details } : {}),
     });
     i = next;
   }

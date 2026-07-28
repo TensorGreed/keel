@@ -48,9 +48,12 @@ node. A change's covering tests are one language (there are no cross-language ed
 selection is homogeneous. The pytest run reuses the repo's virtualenv when present (`.venv/bin/
 python` or `$VIRTUAL_ENV` — the Python analog of the node_modules symlink), puts the worktree's
 module roots on `PYTHONPATH` so the change under test is what runs, and parses the JUnit report
-with the same parser `keel ci` uses. When pytest isn't installed for the chosen interpreter,
-`preflight` returns a distinct `runner-unavailable` status naming the interpreter (and `verdict`
-warns) rather than pretending to have executed anything — proof over prediction.
+with the same parser `keel ci` uses. It runs with `--continue-on-collection-errors` so one
+broken sub-project (e.g. an `examples/` tree importing a package not in the venv) can't abort
+the whole run: those surface as their own `collection-error` failure records, coexisting with
+the real results. When pytest isn't installed for the chosen interpreter, `preflight` returns a
+distinct `runner-unavailable` status naming the interpreter (and `verdict` warns) rather than
+pretending to have executed anything — proof over prediction.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

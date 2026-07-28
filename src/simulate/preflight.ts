@@ -12,7 +12,7 @@
  */
 import { getImpact } from "./impact.js";
 import { changedRoots, selectTests } from "./select-tests.js";
-import { runSandbox, type RunStatus, type TestFailure } from "./sandbox.js";
+import { runSandbox, type Runner, type RunStatus, type TestFailure } from "./sandbox.js";
 import { loadHeadGraph } from "../graph/cache.js";
 
 const DEFAULT_MAX_TESTS = 50;
@@ -33,6 +33,8 @@ export interface PreflightFailure {
   trace?: string;
   /** import chain from the failing test file back to the nearest changed file */
   graphPath?: string[];
+  /** "collection-error" when a test file couldn't be imported/collected (not an assertion) */
+  kind?: "collection-error";
 }
 
 export interface PreflightResult {
@@ -44,6 +46,8 @@ export interface PreflightResult {
   uncoveredChanges: string[];
   executed: {
     status: RunStatus;
+    /** which runner executed (vitest | jest | node | pytest), or null if nothing ran */
+    runner: Runner | null;
     passed?: number;
     failed?: number;
     failures: PreflightFailure[];
@@ -108,6 +112,7 @@ export async function preflight(
       message: f.message,
       ...(f.trace ? { trace: f.trace } : {}),
       ...(graphPath ? { graphPath } : {}),
+      ...(f.kind ? { kind: f.kind } : {}),
     };
   });
 
@@ -117,6 +122,7 @@ export async function preflight(
     uncoveredChanges: selection.uncoveredChanges,
     executed: {
       status: sandbox.status,
+      runner: sandbox.runner,
       ...(sandbox.passed !== undefined ? { passed: sandbox.passed } : {}),
       ...(sandbox.failed !== undefined ? { failed: sandbox.failed } : {}),
       failures,

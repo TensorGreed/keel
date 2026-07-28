@@ -57,6 +57,37 @@ const BREAK = `diff --git a/calc.py b/calc.py
 +    return a - b
 `;
 
+/**
+ * A repo shaped like a real project: a main package with a passing test, plus an examples/
+ * sub-project that depends on something not installed in the venv. `kind` chooses how it breaks:
+ * a broken test-file import (a recoverable collection error, with --continue-on-collection-errors)
+ * or a broken conftest (fatal on modern pytest — aborts the whole run, no report).
+ */
+function makeSubprojectRepo(kind: "testfile" | "conftest"): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "keel-pysub-"));
+  git(d, ["init", "-b", "main"]);
+  write(d, ".gitignore", ".venv/\n.keel/\n");
+  write(d, "pkg/__init__.py", "");
+  write(d, "pkg/helpers.py", 'def greet():\n    return "hi"\n');
+  write(d, "tests/test_helpers.py", "from pkg.helpers import greet\n\n\ndef test_greet():\n    assert greet() == \"hi\"\n");
+  const brokenImport = "import totally_not_installed_xyz  # not in the venv\n";
+  write(d, "examples/demo/test_demo.py", (kind === "testfile" ? brokenImport : "") + "from pkg.helpers import greet\n\n\ndef test_demo():\n    assert greet()\n");
+  if (kind === "conftest") write(d, "examples/demo/conftest.py", brokenImport);
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "init"]);
+  return d;
+}
+// Break the main package so its test fails — and pulls in the examples sub-project (it imports pkg too).
+const SUB_BREAK = `diff --git a/pkg/helpers.py b/pkg/helpers.py
+--- a/pkg/helpers.py
++++ b/pkg/helpers.py
+@@ -1,2 +1,2 @@
+ def greet():
+-    return "hi"
++    return "bye"
+`;
+const ANSI = /\x1b\[|#x1[bB]\[/; // real ESC or pytest's escaped placeholder
+
 let dir: string;
 beforeAll(async () => {
   await initGraphScanners();
@@ -84,10 +115,11 @@ describe("pytest runner — unavailable path (always)", () => {
 });
 
 describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => {
-  it("executes the change and returns failures with a graph path to it", async () => {
+  it("executes the change, names the runner, and returns failures with a graph path", async () => {
     const pf = await preflight(dir, { diff: BREAK });
     if ("error" in pf) throw new Error(pf.error);
     expect(pf.executed.status).toBe("failed");
+    expect(pf.executed.runner).toBe("pytest"); // runner reported (was undefined before)
     expect(pf.executed.failed).toBeGreaterThanOrEqual(1);
     const failure = pf.executed.failures.find((f) => f.file === "test_calc.py");
     expect(failure).toBeDefined();
@@ -100,5 +132,49 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
     if ("error" in pf) throw new Error(pf.error);
     expect(pf.executed.status).toBe("passed");
     expect(pf.executed.passed).toBeGreaterThanOrEqual(1);
+  }, 60_000);
+
+  it("surfaces real failures even when a sub-project can't be collected", async () => {
+    const repo = makeSubprojectRepo("testfile");
+    try {
+      const pf = await preflight(repo, { diff: SUB_BREAK });
+      if ("error" in pf) throw new Error(pf.error);
+      expect(pf.executed.status).toBe("failed");
+      expect(pf.executed.runner).toBe("pytest");
+
+      // the main package's real failure still surfaces, with its graph path
+      const real = pf.executed.failures.find((f) => f.file === "tests/test_helpers.py");
+      expect(real).toBeDefined();
+      expect(real!.kind).toBeUndefined();
+      expect(real!.graphPath).toEqual(["tests/test_helpers.py", "pkg/helpers.py"]);
+
+      // the broken sub-project is its own collection-error record — not a mask over everything
+      const coll = pf.executed.failures.find((f) => f.file === "examples/demo/test_demo.py");
+      expect(coll?.kind).toBe("collection-error");
+      expect(coll!.message).toContain("totally_not_installed_xyz");
+      expect(coll!.message).not.toMatch(ANSI); // ImportError line, no ANSI
+
+      // status reflects real results: both the failure and the collection error are counted
+      expect(pf.executed.failed).toBeGreaterThanOrEqual(2);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("reports a failed run honestly (with a clean output tail) when a broken conftest aborts it", async () => {
+    const repo = makeSubprojectRepo("conftest");
+    try {
+      const pf = await preflight(repo, { diff: SUB_BREAK });
+      if ("error" in pf) throw new Error(pf.error);
+      // Modern pytest aborts on a fatal conftest (no report). Whichever way it goes, we never
+      // report a silent failed+empty: the run failed and the reason is in a cleaned output tail.
+      expect(pf.executed.status).toBe("failed");
+      expect(pf.executed.runner).toBe("pytest");
+      const evidence = `${pf.executed.output ?? ""}\n${pf.executed.failures.map((f) => f.message).join("\n")}`;
+      expect(evidence).toContain("totally_not_installed_xyz");
+      expect(pf.executed.output ?? "").not.toMatch(ANSI); // ANSI stripped from the tail
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
   }, 60_000);
 });
