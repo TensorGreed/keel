@@ -12,6 +12,10 @@ import { getImpact } from "../simulate/impact.js";
 import { changedRoots, selectTests } from "../simulate/select-tests.js";
 import { preflight } from "../simulate/preflight.js";
 import { historyFor } from "../git/history.js";
+import { answerWhy } from "../retrieval/why.js";
+import { OllamaEmbeddingModel } from "../retrieval/embed.js";
+import { resolveRepoRef } from "../github/remote.js";
+import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
   const abs = path.isAbsolute(input) ? input : path.resolve(repoRoot, input);
@@ -22,7 +26,9 @@ function json(data: unknown): { content: Array<{ type: "text"; text: string }> }
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
-export function registerTools(server: McpServer, repoRoot: string): void {
+export function registerTools(server: McpServer, repoRoot: string, store?: SqliteEventStore): void {
+  if (store) registerWhy(server, repoRoot, store);
+
   server.tool(
     "get_dependencies",
     "Dependency report for a source file in the repo: what it imports, what imports it, " +
@@ -135,6 +141,52 @@ export function registerTools(server: McpServer, repoRoot: string): void {
         return json({ path: rel, commits });
       } catch (err) {
         return json({ error: `get_history failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** Query-time embedding timeout: keep the server responsive if Ollama is slow/absent. */
+const WHY_EMBED_TIMEOUT_MS = 2000;
+
+/** Registered only when an event store is available (needs mined/human decisions to read). */
+function registerWhy(server: McpServer, repoRoot: string, store: SqliteEventStore): void {
+  server.tool(
+    "why",
+    "Answer 'why is this like this?' from mined + human-recorded decision records, with " +
+      "source receipts (the PR that made the call, its author and date). Give a file path, a " +
+      "question, or both (both = decisions linked to the file, ranked by the question). " +
+      "Each decision carries its origin (mined | human — human overrides win), why it matched " +
+      "(direct / dependency / dependent graph link, or semantic / keyword), and its source. " +
+      "Semantic search uses a LOCAL embedding model and falls back to keyword match if none is " +
+      "reachable — never fails. Populate the index with `keel ingest` then `keel mine`.",
+    {
+      path: z.string().optional().describe("A source file to find decisions about (relative to repo root)"),
+      question: z.string().optional().describe("A natural-language question to search decisions by"),
+    },
+    async ({ path: filePath, question }) => {
+      try {
+        if (filePath === undefined && question === undefined) {
+          return json({ error: "why needs a path, a question, or both" });
+        }
+        const { graph } = await loadHeadGraph(repoRoot);
+        const ref = await resolveRepoRef(repoRoot);
+        const embedModel = new OllamaEmbeddingModel(
+          process.env["KEEL_EMBED_MODEL"],
+          process.env["KEEL_OLLAMA_URL"],
+          WHY_EMBED_TIMEOUT_MS,
+        );
+        const result = await answerWhy(
+          store,
+          {
+            ...(filePath !== undefined ? { path: normalize(repoRoot, filePath) } : {}),
+            ...(question !== undefined ? { question } : {}),
+          },
+          { graph, embedModel, repoRef: "error" in ref ? null : ref },
+        );
+        return json(result);
+      } catch (err) {
+        return json({ error: `why failed: ${(err as Error).message}` });
       }
     },
   );

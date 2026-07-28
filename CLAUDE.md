@@ -51,11 +51,11 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          CLI entry: dispatches `keel serve` (default), `init`, `ingest`, `mine`
+  index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
-                    select_tests, preflight, get_history)
+                    select_tests, preflight, why, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
@@ -67,8 +67,9 @@ src/
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
                     The one place model calls are allowed — Ollama or batch Haiku,
                     injectable DecisionModel; never reached from the MCP server
-  retrieval/        Decision index: embed.ts (offline local embeddings, injectable),
-                    index.ts (retrieve decisions by graph node or by meaning — no model calls)
+  retrieval/        Decision index: embed.ts (local embeddings, injectable),
+                    index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
+                    composition — file links + semantic/keyword, human overrides, receipts)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
@@ -99,5 +100,13 @@ tests, and `preflight` ties it together: it validates the diff with `git apply`,
 in an isolated worktree (`sandbox.ts`), and runs the selected tests under hard budget caps,
 returning executed pass/fail with per-failure traces and the import path from each failing
 test back to the change. Explicit diffs are validated the same way analysis and execution
-apply them, so the two never disagree. Phase 2 (team memory) is the next work — see
-`docs/roadmap.md` and pick up the first unchecked item.
+apply them, so the two never disagree.
+
+Phase 2 (team memory) is nearly complete. `keel ingest` backfills GitHub PRs + review
+threads into the event log; `keel mine` extracts decision records from them with a local
+(Ollama) or batch-Haiku model and embeds them locally for retrieval (the only place model
+calls happen — offline, plus a local query embedding in the server); the `why` MCP tool
+answers "why is this like this?" for a file or question, linking decisions through the graph
+with PR source receipts, and `keel decision add`/`reject` gives humans an override that
+outranks or suppresses mined records. Remaining: incremental mining on new PRs (the last
+Phase 2 item), then Phase 3 (trust layer) — see `docs/roadmap.md`.

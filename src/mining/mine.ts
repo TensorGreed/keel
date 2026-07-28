@@ -91,6 +91,7 @@ function decisionEvent(pr: KeelEvent, thread: PrThread, record: ReturnType<typeo
     ...(pr.actor ? { actor: pr.actor } : {}),
     title: d.summary,
     payload: {
+      origin: "mined",
       sourcePr: pr.externalId,
       prNumber: thread.number,
       summary: d.summary,

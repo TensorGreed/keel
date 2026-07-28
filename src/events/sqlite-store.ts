@@ -170,6 +170,25 @@ export class SqliteEventStore implements EventStore {
     return out;
   }
 
+  /** Number of events of a kind — for cheap "what exists?" diagnostics. */
+  count(kind: EventKind): number {
+    const row = this.db.prepare("SELECT COUNT(*) AS n FROM events WHERE kind = ?").get(kind) as { n: number };
+    return row.n;
+  }
+
+  /** Mark a decision suppressed (a human "reject"); kept in the log, excluded from results. */
+  suppressDecision(externalId: string): void {
+    this.db.prepare("INSERT OR IGNORE INTO suppressed_decisions (external_id) VALUES (?)").run(externalId);
+  }
+
+  /** External ids of all suppressed decisions. */
+  suppressedDecisions(): Set<string> {
+    const rows = this.db.prepare("SELECT external_id AS externalId FROM suppressed_decisions").all() as unknown as {
+      externalId: string;
+    }[];
+    return new Set(rows.map((r) => r.externalId));
+  }
+
   private hydrate(row: EventRow): KeelEvent {
     const files = (
       this.db.prepare("SELECT path FROM event_files WHERE event_id = ? ORDER BY path").all(row.id) as {

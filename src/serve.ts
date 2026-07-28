@@ -49,7 +49,7 @@ export async function serve(
   }
 
   const server = new McpServer({ name: "keel", version: "0.0.1" });
-  registerTools(server, repoRoot);
+  registerTools(server, repoRoot, store);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

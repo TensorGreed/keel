@@ -37,7 +37,7 @@ Goal: `why(path)` answers with mined decision records and receipts.
 - [x] GitHub connector: backfill PRs + review threads into the event log
 - [x] Decision miner: local model (Ollama) or batch Haiku; prompt + eval fixture set
 - [x] Decision records linked to graph nodes; embeddings for retrieval (local model)
-- [ ] `why` MCP tool with source links; pin/correct mechanism (human override wins)
+- [x] `why` MCP tool with source links; pin/correct mechanism (human override wins)
 - [ ] Incremental mining on new PRs (cost target: <$0.25/day for 50 PRs)
 
 ## Phase 3 — Trust layer

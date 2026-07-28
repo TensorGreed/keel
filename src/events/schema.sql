@@ -39,3 +39,10 @@ CREATE TABLE IF NOT EXISTS embeddings (
   dim      INTEGER NOT NULL,
   vector   BLOB NOT NULL
 );
+
+-- Human overrides: a rejected decision stays in the log (auditable) but is excluded from
+-- `why` results. Keyed by external_id so a suppression survives re-mining — the miner never
+-- resurrects a rejected record.
+CREATE TABLE IF NOT EXISTS suppressed_decisions (
+  external_id TEXT PRIMARY KEY
+);

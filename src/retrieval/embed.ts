@@ -30,6 +30,8 @@ export class OllamaEmbeddingModel implements EmbeddingModel {
   constructor(
     private readonly model: string = DEFAULT_EMBED_MODEL,
     private readonly baseUrl: string = DEFAULT_OLLAMA_URL,
+    /** query-time cap so an unreachable/slow Ollama can't hang the MCP server (see why.ts) */
+    private readonly timeoutMs?: number,
   ) {
     this.name = `ollama:${model}`;
   }
@@ -42,6 +44,7 @@ export class OllamaEmbeddingModel implements EmbeddingModel {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: this.model, input: texts }),
+        ...(this.timeoutMs !== undefined ? { signal: AbortSignal.timeout(this.timeoutMs) } : {}),
       });
     } catch (err) {
       throw new EmbeddingError(`cannot reach Ollama at ${this.baseUrl}: ${(err as Error).message}`);
