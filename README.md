@@ -46,9 +46,11 @@ for TypeScript/JavaScript repos:
 - `why` — the decision behind a file or answer to a question, with PR source receipts
   (`keel ingest` + `keel mine` populate it; `keel decision add`/`reject` for human overrides)
 - `context` — a one-call briefing for a task: the candidate files, each with blast radius,
-  covering tests, recent history, and linked decisions, plus rolled-up suggested tests and
-  risk flags (uncovered / high-blast-radius / protected-path / top-hotspot). Composition only,
-  no LLM calls
+  covering tests, recent history, linked decisions, and owners, plus rolled-up suggested tests
+  and risk flags (uncovered / high-blast-radius / protected-path / top-hotspot). Composition
+  only, no LLM calls
+- `suggest_reviewers` — who should review a change, ranked by recency-weighted authorship of the
+  files it touches (from commit + PR history), excluding bots and the change's own author
 - `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
   radius, the executed sim, coverage, affected decisions, and **architectural import rules**
   (`forbiddenImports`: a change that introduces or retains a forbidden `from`→`to` edge blocks,

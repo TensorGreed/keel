@@ -23,6 +23,7 @@ function facts(over: Partial<VerdictFacts> = {}): VerdictFacts {
     relevantDecisions: [],
     hasHumanDecision: false,
     forbiddenImports: [],
+    foreignChanges: [],
     ...over,
   };
 }
@@ -149,6 +150,21 @@ describe("evaluatePolicy", () => {
     const v = evaluatePolicy(facts({ forbiddenImports: [] }), p);
     expect(v.verdict).toBe("pass");
     expect(reasonFor(v, "forbiddenImports")).toMatchObject({ outcome: "pass" });
+  });
+
+  it("warns on foreign code when the flag is on and a changed file is mostly someone else's", () => {
+    const v = evaluatePolicy(facts({ foreignChanges: [{ file: "src/auth.ts", topAuthor: "carol", share: 0.7 }] }), policy({ warnOnForeignCode: true }));
+    expect(v.verdict).toBe("warn");
+    const r = reasonFor(v, "warnOnForeignCode")!;
+    expect(r.outcome).toBe("warn");
+    expect(r.detail).toContain("src/auth.ts");
+    expect(r.detail).toContain("carol");
+  });
+
+  it("passes foreign-code affirmatively when the change stays in the committer's own code", () => {
+    const v = evaluatePolicy(facts({ foreignChanges: [] }), policy({ warnOnForeignCode: true }));
+    expect(v.verdict).toBe("pass");
+    expect(reasonFor(v, "warnOnForeignCode")).toMatchObject({ outcome: "pass" });
   });
 
   it("lets a block outrank a warn", () => {

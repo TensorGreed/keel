@@ -19,6 +19,7 @@ import { computeVerdict } from "../trust/verdict.js";
 import { buildContext } from "../context/briefing.js";
 import { computeHotspots, coveredFiles } from "../trust/hotspots.js";
 import { loadPolicy, DEFAULT_POLICY } from "../trust/policy.js";
+import { authorShares, resolveCommitter, suggestReviewers } from "../ownership/ownership.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -35,6 +36,7 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
     registerWhy(server, repoRoot, store);
     registerVerdict(server, repoRoot, store);
     registerContext(server, repoRoot, store);
+    registerSuggestReviewers(server, repoRoot, store);
   }
 
   server.tool(
@@ -252,6 +254,7 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
             policy,
             history: (file) => historyFor(repoRoot, file, 5),
             hotspots,
+            owners: (file) => authorShares(store, file, Date.now()),
           },
         );
         if ("error" in loaded && !("error" in result)) {
@@ -260,6 +263,57 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
         return json(result);
       } catch (err) {
         return json({ error: `context failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** Suggest reviewers for a change from recency-weighted authorship of its files. */
+function registerSuggestReviewers(server: McpServer, repoRoot: string, store: SqliteEventStore): void {
+  server.tool(
+    "suggest_reviewers",
+    "Suggest who should review a change, ranked by recency-weighted authorship of the files it " +
+      "touches (changed + impacted), from the event log's commit + PR history. Give a unified diff " +
+      "or omit to use the working tree. Each suggestion says which of the touched files the person " +
+      "knows and their authorship share. Excludes bots (dependabot etc.), an optional `author`, and " +
+      "the change's committer (git user.name) when determinable. Deterministic; no model calls. " +
+      "Needs ingested history (`keel serve` ingests commits; `keel ingest` adds PR authors).",
+    {
+      diff: z.string().optional().describe("Unified diff; omit to use uncommitted working-tree changes"),
+      author: z.string().optional().describe("An author to exclude from suggestions (e.g. the change's author)"),
+      limit: z.number().int().min(1).max(50).optional().describe("Max reviewers to suggest (default 5)"),
+    },
+    async ({ diff, author, limit }) => {
+      try {
+        const impact = await getImpact(repoRoot, diff !== undefined ? { diff } : {});
+        if ("error" in impact) return json(impact);
+
+        const changed = changedRoots(impact.changedFiles);
+        const files = [...new Set([...changed, ...impact.impactedFiles])].slice(0, 200);
+
+        const exclude = new Set<string>();
+        if (author) exclude.add(author);
+        const committer = await resolveCommitter(repoRoot);
+        if (committer) exclude.add(committer);
+
+        const reviewers = await suggestReviewers(store, files, {
+          nowMs: Date.now(),
+          exclude,
+          limit: limit ?? 5,
+        });
+
+        const notes: string[] = [];
+        if (files.length === 0) notes.push("The change touches no graph files, so there's nothing to attribute.");
+        else if (reviewers.length === 0) {
+          notes.push(
+            store.count("commit") === 0
+              ? "No commit history ingested yet — run `keel serve` (or `keel ingest` for PR authors)."
+              : "No human authors found for the touched files (new files, or only excluded authors/bots).",
+          );
+        }
+        return json({ reviewers, filesConsidered: files.length, excluded: [...exclude], notes });
+      } catch (err) {
+        return json({ error: `suggest_reviewers failed: ${(err as Error).message}` });
       }
     },
   );

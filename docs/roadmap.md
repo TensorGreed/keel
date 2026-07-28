@@ -64,8 +64,9 @@ tests, decisions, and risks for a change before a line is written.
 - [x] Risk hotspot report: rank files by churn × blast radius × coverage gap, so review
       attention goes where a change is most likely to bite (`keel report --hotspots`; also a
       risk flag in the context tool)
-- [ ] Reviewer / ownership signal: who has touched the impacted files (history + CODEOWNERS),
-      surfaced as a suggested-reviewer fact on a change
+- [x] Reviewer / ownership signal: recency-weighted authorship per file from the event log,
+      surfaced as the `suggest_reviewers` tool, per-candidate owners in `context`, and a
+      `warnOnForeignCode` verdict signal (bots excluded)
 
 ## Phase 5 — Widen
 

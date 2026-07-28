@@ -6,6 +6,7 @@
 import { assembleFacts, touchedPaths, type FactsOptions, type SimFacts, type VerdictFacts } from "./facts.js";
 import { DEFAULT_POLICY, globMatch, loadPolicy, type Policy } from "./policy.js";
 import { describeViolation } from "./arch.js";
+import { resolveCommitter } from "../ownership/ownership.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 export type VerdictLevel = "pass" | "warn" | "block";
@@ -123,6 +124,16 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     }
   }
 
+  // --- foreign code (soft signal) ---
+  if (policy.warnOnForeignCode) {
+    if (facts.foreignChanges.length > 0) {
+      const list = facts.foreignChanges.slice(0, 5).map((f) => `${f.file} (mostly ${f.topAuthor})`).join(", ");
+      push("warnOnForeignCode", "warn", `${facts.foreignChanges.length} changed file(s) are mostly authored by someone else — consider their review: ${list}`);
+    } else {
+      push("warnOnForeignCode", "pass", "the change stays within the committer's own code (or authorship is unknown)");
+    }
+  }
+
   const verdict: VerdictLevel = reasons.some((r) => r.outcome === "block")
     ? "block"
     : reasons.some((r) => r.outcome === "warn")
@@ -141,10 +152,14 @@ export async function computeVerdict(
   const loaded = loadPolicy(repoRoot);
   if ("error" in loaded) return { error: loaded.error };
 
-  // Hand the arch rules to fact-gathering so it computes the gating violations (needs the graph).
+  // Hand the arch rules to fact-gathering so it computes the gating violations (needs the graph),
+  // and the committer when the policy wants the foreign-code check.
+  const committer = loaded.policy.warnOnForeignCode ? await resolveCommitter(repoRoot) : null;
   const facts = await assembleFacts(repoRoot, store, {
     ...options,
     ...(loaded.policy.forbiddenImports.length > 0 ? { forbiddenImports: loaded.policy.forbiddenImports } : {}),
+    ...(loaded.policy.warnOnForeignCode ? { warnOnForeignCode: true } : {}),
+    ...(committer ? { committer } : {}),
   });
   if ("error" in facts) return { error: facts.error };
 

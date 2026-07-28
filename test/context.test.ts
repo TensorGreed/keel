@@ -72,6 +72,7 @@ function fixture(): { graph: FileGraph; deps: (over?: Partial<ContextDeps>) => C
     policy,
     history: async (f) => (f === "src/auth.ts" ? [commit] : []),
     hotspots: new Set<string>(),
+    owners: async () => [],
     ...over,
   });
   return { graph, deps, store };
@@ -123,6 +124,15 @@ describe("buildContext", () => {
     const b = ok(await buildContext({ task: "x", files: ["src/util.ts"] }, deps({ hotspots: new Set(["src/util.ts"]) })));
     const hot = b.risks.filter((r) => r.type === "top-hotspot").map((r) => r.file);
     expect(hot).toContain("src/util.ts");
+  });
+
+  it("attaches ownership shares to each candidate", async () => {
+    const { deps } = fixture();
+    const owners = async (f: string) =>
+      f === "src/auth.ts" ? [{ author: "carol", share: 0.8, events: 4, lastActive: "2021-06-01T00:00:00Z" }] : [];
+    const b = ok(await buildContext({ task: "login", files: ["src/auth.ts"] }, deps({ owners })));
+    const auth = b.candidates.find((c) => c.file === "src/auth.ts")!;
+    expect(auth.owners).toEqual([{ author: "carol", share: 0.8 }]);
   });
 
   it("links decisions with receipts and rolls them up human-first", async () => {

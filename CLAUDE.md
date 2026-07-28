@@ -56,7 +56,8 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
-                    select_tests, preflight, why, verdict, context, get_history)
+                    select_tests, preflight, why, verdict, context, suggest_reviewers,
+                    get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
@@ -73,8 +74,11 @@ src/
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
                     composition — file links + semantic/keyword, human overrides, receipts)
   context/          briefing.ts: the `context` tool — resolve a task's candidate files, then
-                    compose blast radius + history + decisions + tests + policy risks (ranked,
-                    capped, keyword-fallback like why). No generative calls.
+                    compose blast radius + history + decisions + tests + owners + policy risks
+                    (ranked, capped, keyword-fallback like why). No generative calls.
+  ownership/        ownership.ts: recency-weighted authorship per file from the event log
+                    (commit + PR authors, bots excluded) → `suggest_reviewers`, context owners,
+                    and the verdict's warnOnForeignCode signal. No model calls.
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
                     machine-checkable facts), policy.ts (keel.policy.json, pure eval +
                     glob), arch.ts (forbiddenImports: forbidden from→to graph edges),
@@ -164,3 +168,11 @@ coverage from the select_tests machinery (`src/trust/hotspots.ts`, `churnByFile`
 Every line shows the components, not just the score; capped by `--limit` (default 20). `keel
 report` with no flag prints arch + hotspots. The `context` tool flags a candidate that ranks as
 a top hotspot. No model calls.
+
+Phase 4 item 4, the ownership/reviewer signal, is done (`src/ownership/ownership.ts`). Authorship
+is the recency-weighted share of commit + PR authorship per file from the event log (half-life
+180 days; bots like dependabot excluded). It surfaces three ways: the `suggest_reviewers` MCP
+tool ranks who should review a change (excluding bots, an optional `author`, and the committer
+via `git config user.name`); `context` attaches per-candidate `owners`; and the verdict gains a
+soft `warnOnForeignCode` policy flag (default off) that warns when a change touches files whose
+top author isn't the committer. Deterministic ETL, no model calls.

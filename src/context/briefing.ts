@@ -20,6 +20,7 @@ import { decisionsForFile, searchDecisions } from "../retrieval/index.js";
 import { decisionReceipt, type WhyDecision } from "../retrieval/why.js";
 import { isTestFile, selectTests } from "../simulate/select-tests.js";
 import { globMatch, type Policy } from "../trust/policy.js";
+import type { AuthorShare } from "../ownership/ownership.js";
 
 export interface ContextInput {
   task: string;
@@ -40,6 +41,8 @@ export interface ContextDeps {
   history: (file: string) => Promise<CommitInfo[]>;
   /** paths that rank as repo risk hotspots (churn × blast radius × coverage gap) */
   hotspots: Set<string>;
+  /** recency-weighted authorship shares for a file — injected for testability */
+  owners: (file: string) => Promise<AuthorShare[]>;
 }
 
 export interface CandidateBrief {
@@ -52,6 +55,8 @@ export interface CandidateBrief {
   recentHistory: { hash: string; date: string; author: string; subject: string }[];
   decisions: WhyDecision[];
   tests: { covering: string[]; uncovered: boolean };
+  /** who knows this file, by recency-weighted authorship (top few) */
+  owners: { author: string; share: number }[];
 }
 
 export type RiskType = "uncovered" | "high-blast-radius" | "protected-path" | "top-hotspot";
@@ -75,6 +80,7 @@ const MAX_KEY_DEPENDENTS = 8;
 const MAX_DECISIONS_PER_FILE = 5;
 const MAX_SUGGESTED_TESTS = 20;
 const MAX_RELEVANT_DECISIONS = 12;
+const MAX_OWNERS = 3;
 const HISTORY_DEPTH = 5;
 /** Blast radius that counts as "high" when the policy sets no cap of its own. */
 const DEFAULT_HIGH_BLAST_RADIUS = 25;
@@ -232,6 +238,7 @@ export async function buildContext(
       .map((l) => decisionReceipt(l.decision, l.reason === "direct" ? "direct" : `${l.reason} (${l.via})`, deps.repoRef));
 
     const commits = (await deps.history(c.file)).slice(0, HISTORY_DEPTH);
+    const owners = (await deps.owners(c.file)).slice(0, MAX_OWNERS).map((o) => ({ author: o.author, share: Number(o.share.toFixed(3)) }));
 
     candidates.push({
       file: c.file,
@@ -242,6 +249,7 @@ export async function buildContext(
       recentHistory: commits.map((k) => ({ hash: k.hash.slice(0, 9), date: k.date, author: k.author, subject: k.subject })),
       decisions,
       tests: { covering, uncovered },
+      owners,
     });
 
     for (const t of covering) testUnion.add(t);

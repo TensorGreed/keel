@@ -11,6 +11,7 @@ import { loadGraph } from "../graph/cache.js";
 import { resolveRepoRef } from "../github/remote.js";
 import { decisionReceipt, type WhyDecision } from "../retrieval/why.js";
 import { findForbiddenEdges, gatingViolations, type ArchViolation } from "./arch.js";
+import { authorShares } from "../ownership/ownership.js";
 import type { ForbiddenImport } from "./policy.js";
 import type { KeelEvent } from "../events/store.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
@@ -48,6 +49,8 @@ export interface VerdictFacts {
   hasHumanDecision: boolean;
   /** forbidden import edges a changed file introduces or retains (empty if no rules configured) */
   forbiddenImports: ArchViolation[];
+  /** changed files whose top author isn't the committer (only when warnOnForeignCode is on) */
+  foreignChanges: { file: string; topAuthor: string; share: number }[];
 }
 
 export interface FactsOptions {
@@ -56,6 +59,12 @@ export interface FactsOptions {
   maxSeconds?: number;
   /** architectural rules to check against the post-change graph (from the policy) */
   forbiddenImports?: ForbiddenImport[];
+  /** compute foreign-code facts: flag changed files whose top author isn't `committer` */
+  warnOnForeignCode?: boolean;
+  /** the person making the change, for the foreign-code check (git user.name) */
+  committer?: string;
+  /** wall-clock for recency weighting (defaults to now); injected for deterministic tests */
+  now?: number;
 }
 
 /** All the paths a changed-file entry touches (new + old side of a rename). */
@@ -101,6 +110,19 @@ export async function assembleFacts(
     forbiddenImports = gatingViolations(all, changed);
   }
 
+  // Foreign-code: a changed file whose recency-weighted top author isn't the committer. Only
+  // when the policy asks and we know who's committing — otherwise there's nothing to compare.
+  const foreignChanges: VerdictFacts["foreignChanges"] = [];
+  if (options.warnOnForeignCode && options.committer) {
+    const now = options.now ?? Date.now();
+    for (const root of changedRoots(impact.changedFiles)) {
+      const [top] = await authorShares(store, root, now);
+      if (top && top.author !== options.committer) {
+        foreignChanges.push({ file: root, topAuthor: top.author, share: Number(top.share.toFixed(3)) });
+      }
+    }
+  }
+
   return {
     changedFiles: impact.changedFiles,
     blastRadius: pf.impacted.length,
@@ -118,6 +140,7 @@ export async function assembleFacts(
     testsSelected: pf.testsSelected,
     ...relevant,
     forbiddenImports,
+    foreignChanges,
   };
 }
 

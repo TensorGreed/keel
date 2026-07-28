@@ -37,6 +37,8 @@ export interface Policy {
   forbiddenImports: ForbiddenImport[];
   /** warn when the change may be affected by recorded decisions (relevantDecisions non-empty) */
   requireDecisionReview: boolean;
+  /** warn when the change touches files whose top author isn't the committer */
+  warnOnForeignCode: boolean;
 }
 
 /** Conservative defaults for a repo with no policy file: prove the change is safe to run,
@@ -50,6 +52,7 @@ export const DEFAULT_POLICY: Policy = {
   protectedPaths: [],
   forbiddenImports: [],
   requireDecisionReview: false,
+  warnOnForeignCode: false,
 };
 
 export interface LoadedPolicy {
@@ -83,6 +86,8 @@ export function parsePolicy(data: unknown): Policy | { error: string } {
   if (typeof forbidTruncatedSim === "object") return forbidTruncatedSim;
   const requireDecisionReview = bool("requireDecisionReview", DEFAULT_POLICY.requireDecisionReview);
   if (typeof requireDecisionReview === "object") return requireDecisionReview;
+  const warnOnForeignCode = bool("warnOnForeignCode", DEFAULT_POLICY.warnOnForeignCode);
+  if (typeof warnOnForeignCode === "object") return warnOnForeignCode;
 
   let maxBlastRadius: number | null = DEFAULT_POLICY.maxBlastRadius;
   if (data["maxBlastRadius"] !== undefined && data["maxBlastRadius"] !== null) {
@@ -120,7 +125,7 @@ export function parsePolicy(data: unknown): Policy | { error: string } {
     }
   }
 
-  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, forbiddenImports, requireDecisionReview };
+  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, forbiddenImports, requireDecisionReview, warnOnForeignCode };
 }
 
 /** Load keel.policy.json from the repo root. Missing -> defaults; malformed -> { error }. */
