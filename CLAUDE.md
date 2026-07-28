@@ -58,8 +58,10 @@ src/
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
                     select_tests, preflight, why, verdict, context, suggest_reviewers,
                     get_history)
-  graph/            System graph: import/dependency scanning (TS compiler API);
-                    cache.ts is the incremental, git-HEAD-keyed graph cache
+  graph/            System graph, language-agnostic composer + a per-language scanner seam:
+                    scanner.ts (LanguageScanner interface), typescript-scanner.ts (TS compiler
+                    API), scanners.ts (registry by extension), dependencies.ts (walk + resolve
+                    + assemble), cache.ts (incremental, git-HEAD-keyed graph cache)
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests),
