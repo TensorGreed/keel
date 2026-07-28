@@ -44,7 +44,11 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     // The sim couldn't produce a result — can't affirm safety, so block.
     push("sim", "block", `the sim could not run (${sim.status})${sim.error ? `: ${sim.error}` : ""}`);
   } else if (sim.status === "failed") {
-    const detail = `${sim.failed ?? facts.sim.failures.length} test(s) failed: ${failureList(sim)}`;
+    // vitest/jest report per-test failures; node:test only reports a non-zero run.
+    const detail =
+      sim.failures.length > 0
+        ? `${sim.failed ?? sim.failures.length} test(s) failed: ${failureList(sim)}`
+        : "the test run failed (non-zero exit; the runner reported no per-test detail)";
     if (policy.requireSimPass) push("requireSimPass", "block", detail);
     else push("sim", "warn", `${detail} (requireSimPass is off)`);
   } else if (sim.status === "passed") {

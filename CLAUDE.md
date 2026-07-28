@@ -51,7 +51,7 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision
+  index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision, verdict
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
@@ -72,9 +72,12 @@ src/
                     composition — file links + semantic/keyword, human overrides, receipts)
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
                     machine-checkable facts), policy.ts (keel.policy.json, pure eval +
-                    glob), verdict.ts (pass/warn/block with audited reasons). No model calls.
+                    glob), verdict.ts (pass/warn/block with audited reasons),
+                    verdict-cli.ts (`keel verdict` for CI checks + Claude Code hooks).
+                    No model calls.
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
+recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook)
 test/               Vitest; fixtures under test/fixtures/
 ```
 
@@ -114,9 +117,13 @@ embedding in the server. The `why` MCP tool answers "why is this like this?" for
 question, linking decisions through the graph with PR source receipts; `keel decision
 add`/`reject` gives humans an override that outranks or suppresses mined records.
 
-Phase 3 (trust layer) is underway. The `verdict` MCP tool composes the earlier facts —
+Phase 3 (trust layer) is nearly complete. The `verdict` MCP tool composes the earlier facts —
 blast radius, the executed preflight sim, uncovered changes, and decisions the change may
 affect — and evaluates them against `keel.policy.json` (conservative defaults if absent) to
 return a machine-checkable pass | warn | block, each reason naming the exact rule and fact
-that triggered it. Pure evaluation, no model calls (`src/trust/`). Remaining Phase 3 work:
-wiring the verdict into a GitHub check, and a Claude Code hook recipe — see `docs/roadmap.md`.
+that triggered it. The same computation is reachable from the shell as `keel verdict`
+(`trust/verdict-cli.ts`): exit codes 0/2/1 for CI gating, `--json` for the full verdict, and
+`--hook`, which speaks the Claude Code Stop-hook protocol (reads the event on stdin, emits
+block JSON on a failing verdict, honors `stop_hook_active`) so an agent can't finish on a
+change that fails policy — see `recipes/claude-code-hook.md`. Pure evaluation, no model calls
+(`src/trust/`). The one remaining Phase 3 item is wiring the verdict into a GitHub check.
