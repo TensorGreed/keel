@@ -8,8 +8,9 @@
  * working tree's own changes) is applied there, the selected tests run under a wall-time
  * cap, and the worktree is torn down. The main working tree is never touched.
  *
- * Runner is auto-detected from package.json: vitest or jest (JSON-reported, so failures are
- * structured), else Node's built-in `node --test` (exit-code + output). No LLM, no network.
+ * Runner is auto-detected from the selected tests: Python tests run under pytest (JUnit-reported,
+ * reusing the ci/junit parser); otherwise, from package.json, vitest or jest (JSON-reported, so
+ * failures are structured), else Node's built-in `node --test`. No LLM, no network.
  */
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -17,6 +18,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { promisify } from "node:util";
+import { parseJUnit } from "../ci/junit.js";
+import { pythonModuleRoots } from "../graph/python-scanner.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +28,7 @@ const DEFAULT_MAX_TESTS = 50;
 const MAX_CAPTURE_BYTES = 512 * 1024; // cap captured output so a chatty run can't OOM us
 const OUTPUT_TAIL = 8_000;
 
-export type Runner = "vitest" | "jest" | "node";
+export type Runner = "vitest" | "jest" | "node" | "pytest";
 
 export type RunStatus =
   | "passed"
@@ -34,6 +37,7 @@ export type RunStatus =
   | "apply-failed"
   | "timed-out"
   | "runner-unsupported"
+  | "runner-unavailable"
   | "error";
 
 export interface TestFailure {
@@ -83,12 +87,12 @@ interface ProcResult {
 function runProcess(
   command: string,
   args: string[],
-  opts: { cwd: string; timeoutMs: number },
+  opts: { cwd: string; timeoutMs: number; env?: Record<string, string> },
 ): Promise<ProcResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: opts.cwd,
-      env: { ...process.env, CI: "true", FORCE_COLOR: "0" },
+      env: { ...process.env, CI: "true", FORCE_COLOR: "0", ...opts.env },
     });
     let stdout = "";
     let stderr = "";
@@ -122,7 +126,7 @@ async function git(cwd: string, args: string[]): Promise<{ stdout: string } | nu
   }
 }
 
-function detectRunner(worktree: string): Runner {
+function detectRunner(worktree: string): "vitest" | "jest" | "node" {
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(worktree, "package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
@@ -135,6 +139,80 @@ function detectRunner(worktree: string): Runner {
     // no/broken package.json -> fall back to Node's built-in runner
   }
   return "node";
+}
+
+function isPythonTest(file: string): boolean {
+  return file.endsWith(".py") || file.endsWith(".pyi");
+}
+
+function isFile(p: string): boolean {
+  try {
+    return fs.statSync(p).isFile();
+  } catch {
+    return false;
+  }
+}
+
+interface Interpreter {
+  cmd: string;
+  /** a short, stable label for messages (repo-relative when under the repo) */
+  label: string;
+}
+
+/**
+ * The Python interpreter to run pytest with: the repo's virtualenv when present (the analog of
+ * symlinking node_modules — it carries the project's installed deps), else `python3` on PATH.
+ */
+function findPythonInterpreter(repoRoot: string): Interpreter {
+  const venv = process.env["VIRTUAL_ENV"];
+  const candidates = [
+    venv ? path.join(venv, "bin", "python") : null,
+    path.join(repoRoot, ".venv", "bin", "python"),
+    path.join(repoRoot, "venv", "bin", "python"),
+    venv ? path.join(venv, "Scripts", "python.exe") : null,
+    path.join(repoRoot, ".venv", "Scripts", "python.exe"),
+  ].filter((p): p is string => p !== null);
+  for (const cmd of candidates) {
+    if (isFile(cmd)) return { cmd, label: cmd.startsWith(repoRoot + path.sep) ? path.relative(repoRoot, cmd) : cmd };
+  }
+  return { cmd: "python3", label: "python3" };
+}
+
+/**
+ * Normalize a parsed pytest JUnit report into sandbox counts + failures. pytest's default JUnit
+ * doesn't emit a per-case `file`, so when it's absent we recover it from the case's classname —
+ * whose last segment is the test module's basename — matched against the files we actually ran.
+ * That's what lets preflight draw the graph path from the failing test back to the change.
+ */
+function pytestResults(
+  xml: string,
+  worktree: string,
+  ranTests: string[],
+): { passed: number; failed: number; failures: TestFailure[]; total: number } {
+  const byBasename = new Map<string, string>();
+  for (const t of ranTests) byBasename.set(path.posix.basename(t).replace(/\.pyi?$/, ""), t);
+  const fileOf = (t: { file?: string; classname?: string }): string | undefined => {
+    if (t.file) return toRepoRel(worktree, t.file);
+    const base = (t.classname ?? "").split(".").pop();
+    return base ? byBasename.get(base) : undefined;
+  };
+
+  const report = parseJUnit(xml);
+  let passed = 0;
+  let failed = 0;
+  const failures: TestFailure[] = [];
+  for (const t of report.tests) {
+    if (t.status === "passed") {
+      passed++;
+    } else if (t.status === "failed" || t.status === "error") {
+      failed++;
+      const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
+      const file = fileOf(t);
+      failures.push({ name: t.name || "(unnamed test)", ...(file ? { file } : {}), message });
+    }
+    // skipped: not a pass or a fail — omitted from both counts
+  }
+  return { passed, failed, failures, total: report.tests.length };
 }
 
 /** Parse Jest-schema JSON (vitest emits the same) into normalized failures. */
@@ -245,7 +323,7 @@ async function applyChange(
   }
 }
 
-function runnerCommand(runner: Runner, worktree: string, testFiles: string[], jsonFile: string): [string, string[]] {
+function runnerCommand(runner: "vitest" | "jest" | "node", worktree: string, testFiles: string[], jsonFile: string): [string, string[]] {
   switch (runner) {
     case "vitest":
       return ["npx", ["--no-install", "vitest", "run", ...testFiles, "--reporter=json", `--outputFile=${jsonFile}`]];
@@ -254,6 +332,81 @@ function runnerCommand(runner: Runner, worktree: string, testFiles: string[], js
     case "node":
       return [process.execPath, ["--test", ...testFiles]];
   }
+}
+
+/**
+ * Run the selected Python tests under pytest in the worktree, returning normalized results.
+ * pytest missing from the chosen interpreter is a clean "runner-unavailable" status naming it,
+ * never a crash. Returns the result sans durationMs (the caller stamps it).
+ */
+async function runPytest(
+  repoRoot: string,
+  worktree: string,
+  parent: string,
+  ranTests: string[],
+  timeoutMs: number,
+  capped: { requested: number; ran: number } | undefined,
+): Promise<Omit<SandboxResult, "durationMs">> {
+  const interpreter = findPythonInterpreter(repoRoot);
+  const cappedField = capped ? { capped } : {};
+
+  // Is pytest importable via this interpreter? Check first, so a missing runner is a clean
+  // status rather than a confusing "failed" from pytest's own "No module named pytest".
+  const check = await runProcess(interpreter.cmd, ["-m", "pytest", "--version"], { cwd: worktree, timeoutMs: 30_000 });
+  if (check.spawnError || check.code !== 0) {
+    return {
+      status: "runner-unavailable",
+      runner: "pytest",
+      ranTests,
+      error: `pytest is not available via ${interpreter.label}${check.spawnError ? `: ${check.spawnError}` : ""} — install pytest (e.g. in the repo's .venv) to execute Python tests`,
+      ...cappedField,
+    };
+  }
+
+  // Put the worktree's module roots on PYTHONPATH so the change under test is imported (and takes
+  // precedence over any installed copy) — the pytest analog of the node_modules symlink.
+  const pythonPath = [...pythonModuleRoots(worktree), process.env["PYTHONPATH"]].filter(Boolean).join(path.delimiter);
+  const junitFile = path.join(parent, "report.xml");
+  const proc = await runProcess(
+    interpreter.cmd,
+    ["-m", "pytest", ...ranTests, `--junitxml=${junitFile}`, "-p", "no:cacheprovider"], // core pytest, no plugins
+    { cwd: worktree, timeoutMs, env: { PYTHONPATH: pythonPath } },
+  );
+
+  const combined = tail(`${proc.stdout}\n${proc.stderr}`);
+  if (proc.timedOut) {
+    return { status: "timed-out", runner: "pytest", ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+  if (proc.spawnError) {
+    return { status: "error", runner: "pytest", ranTests, error: proc.spawnError, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+
+  let results: ReturnType<typeof pytestResults> | null = null;
+  try {
+    results = pytestResults(fs.readFileSync(junitFile, "utf8"), worktree, ranTests);
+  } catch {
+    results = null;
+  }
+
+  // pytest exit codes: 0 ok, 1 tests failed, 2 collection error, 5 no tests collected.
+  const status: RunStatus =
+    results && results.total > 0
+      ? results.failed > 0 ? "failed" : "passed"
+      : proc.code === 5
+        ? "no-tests"
+        : proc.code === 0
+          ? "passed"
+          : "failed";
+
+  return {
+    status,
+    runner: "pytest",
+    ranTests,
+    exitCode: proc.code,
+    ...(results ? { passed: results.passed, failed: results.failed, failures: results.failures } : {}),
+    ...(combined ? { output: combined } : {}),
+    ...cappedField,
+  };
 }
 
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
@@ -307,6 +460,12 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
 
     const applyError = await applyChange(repoRoot, worktree, options.diff);
     if (applyError) return done({ status: "apply-failed", runner: null, ranTests, error: applyError, ...(capped ? { capped } : {}) });
+
+    // A change's covering tests are one language (no cross-language edges), so a Python selection
+    // runs under pytest; anything else under the JS runners.
+    if (ranTests.every(isPythonTest)) {
+      return done(await runPytest(repoRoot, worktree, parent, ranTests, timeoutMs, capped));
+    }
 
     const runner = detectRunner(worktree);
     const jsonFile = path.join(parent, "report.json");

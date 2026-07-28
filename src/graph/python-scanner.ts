@@ -338,6 +338,12 @@ function resolvePythonImport(repoRoot: string, roots: string[], specifier: strin
   return file && inRepoSource(repoRoot, file) ? file : null;
 }
 
+/** The absolute module roots for a repo (configured/convention src, then repo root) — the dirs
+ *  that belong on PYTHONPATH so an in-repo package is importable. Used by the pytest sandbox. */
+export function pythonModuleRoots(repoRoot: string): string[] {
+  return detectRoots(path.resolve(repoRoot));
+}
+
 /** Build the Python scanner for a repo (roots computed once). Requires initPythonScanner(). */
 export function createPythonScanner(root: string): LanguageScanner {
   const repoRoot = path.resolve(root);

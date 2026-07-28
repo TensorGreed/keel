@@ -35,10 +35,10 @@ Full walkthrough with copy-pasteable commands: **[docs/demo.md](docs/demo.md)**.
 ## Status
 
 Phases 0–3 complete (substrate, flight simulator, team memory, trust layer); Phase 4 (compose)
-complete; Phase 5 (widen) underway — **Python graph analysis** now works alongside TS/JS
-(imports, dependents, blast radius, test selection). Execution (the sandbox sim) stays TS/JS-only
-for now; on a Python change `preflight`/`verdict` say so honestly rather than pretending. Working
-today:
+complete; Phase 5 (widen) underway — **Python** now works alongside TS/JS: graph analysis (imports,
+dependents, blast radius, test selection) and **execution** — `preflight` runs Python tests under
+pytest in the sandbox (reusing the repo's venv). Where pytest isn't installed, it says so honestly
+(`runner-unavailable`) rather than pretending. Working today:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)

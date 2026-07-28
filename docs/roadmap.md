@@ -80,8 +80,10 @@ Goal: the same substrate over more languages, more sources, and more than one re
         config OR convention — the importing file's package tree, then src/<pkg>, then repo
         root, namespace packages last), exports (def/class/assign, __all__); zero-build WASM grammar
   - [x] Multi-language cache + mixed TS+Python repos (one graph, no cross-language edges yet);
-        get_dependencies/get_impact/select_tests work on Python; sim runner stays TS/JS-only
-        (preflight returns `runner-unsupported` for Python rather than pretending)
+        get_dependencies/get_impact/select_tests work on Python
+  - [x] pytest sandbox runner: preflight EXECUTES Python (reuses the repo venv, PYTHONPATH to the
+        worktree, JUnit parsed by the `keel ci` parser); pytest absent → `runner-unavailable`
+        naming the interpreter, never a crash
 - [x] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
   - [x] CI connector: `keel ci` ingests JUnit reports into ci_run events (universal, no deps,

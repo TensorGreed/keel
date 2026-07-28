@@ -64,9 +64,10 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     }
   } else if (sim.status === "passed") {
     push(policy.requireSimPass ? "requireSimPass" : "sim", "pass", `all ${sim.passed ?? 0} selected test(s) passed`);
-  } else if (sim.status === "runner-unsupported") {
-    // We selected the tests but can't execute them yet (e.g. Python). Don't pretend it passed;
-    // don't hard-block either — warn that this change is unverified by the sim.
+  } else if (sim.status === "runner-unsupported" || sim.status === "runner-unavailable") {
+    // We selected the tests but couldn't execute them here (no runner for the language, or the
+    // runner isn't installed — e.g. pytest missing). Don't pretend it passed; don't hard-block
+    // either — warn that this change is unverified by the sim.
     push("sim", "warn", `the change's tests couldn't be executed${sim.error ? ` (${sim.error})` : ""} — verify manually`);
   } else if (sim.status === "no-tests" && facts.changedFiles.some((f) => f.inGraph)) {
     // The diff applied but nothing exercises it — a real (soft) blind spot.

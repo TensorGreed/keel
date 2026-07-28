@@ -41,11 +41,16 @@ service shelling out to a Node script, or an FFI boundary). That's honest: such 
 import edges and inferring them reliably is future work. Within each language the graph is
 complete; across languages, files simply sit side by side.
 
-**Execution is TS/JS-only for now.** Graph analysis, impact, and test selection are
-language-agnostic and work on Python (`test_*.py` / `*_test.py` / `tests/` selection). The
-flight simulator's sandbox runner is not: it runs vitest/jest/node. On a Python change,
-`preflight` returns a `runner-unsupported` status (and `verdict` warns) rather than pretending
-to have executed anything — proof over prediction.
+**Execution now covers TS/JS and Python.** Graph analysis, impact, and test selection are
+language-agnostic (`test_*.py` / `*_test.py` / `tests/` selection for Python). The sandbox
+runner picks the runner from the selected tests: **pytest** for Python, else vitest / jest /
+node. A change's covering tests are one language (there are no cross-language edges), so the
+selection is homogeneous. The pytest run reuses the repo's virtualenv when present (`.venv/bin/
+python` or `$VIRTUAL_ENV` — the Python analog of the node_modules symlink), puts the worktree's
+module roots on `PYTHONPATH` so the change under test is what runs, and parses the JUnit report
+with the same parser `keel ci` uses. When pytest isn't installed for the chosen interpreter,
+`preflight` returns a distinct `runner-unavailable` status naming the interpreter (and `verdict`
+warns) rather than pretending to have executed anything — proof over prediction.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

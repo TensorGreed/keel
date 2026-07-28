@@ -90,34 +90,15 @@ export async function preflight(
   const toRun = ordered.slice(0, cap);
   const testsSkipped = ordered.slice(cap).sort();
 
-  // The sandbox runner is JS-only (vitest/jest/node). Python tests are selected and reported,
-  // but we don't have a pytest runner yet — say so rather than pretend to have run them.
-  const pyTests = toRun.filter(isPythonFile);
-  const jsToRun = toRun.filter((f) => !isPythonFile(f));
-  if (jsToRun.length === 0 && pyTests.length > 0) {
-    return {
-      impacted: impact.impactedFiles,
-      testsSelected: ordered,
-      uncoveredChanges: selection.uncoveredChanges,
-      executed: {
-        status: "runner-unsupported",
-        failures: [],
-        durationMs: 0,
-        error: `runner for python not yet supported — ${pyTests.length} python test(s) selected but not executed (graph analysis and test selection still apply)`,
-      },
-      budget: { maxTests, maxSeconds, testsSkipped, truncated: testsSkipped.length > 0 },
-    };
-  }
-
+  // The sandbox picks the runner from the selected tests (pytest for Python, vitest/jest/node
+  // otherwise). A change's covering tests are one language — there are no cross-language edges —
+  // so the selection is homogeneous.
   const sandbox = await runSandbox(repoRoot, {
     ...diffOpt,
-    testFiles: jsToRun,
+    testFiles: toRun,
     timeoutMs: maxSeconds * 1000,
-    maxTests: jsToRun.length, // already capped here; don't let the sandbox re-cap
+    maxTests: toRun.length, // already capped here; don't let the sandbox re-cap
   });
-  // A mixed change ran its JS tests; note any Python tests we couldn't execute.
-  const pyNote =
-    pyTests.length > 0 ? `${pyTests.length} python test(s) selected but not executed (no python runner yet)` : undefined;
 
   const failures: PreflightFailure[] = (sandbox.failures ?? []).map((f: TestFailure) => {
     const graphPath = f.file ? selection.paths[f.file] : undefined;
@@ -140,7 +121,7 @@ export async function preflight(
       ...(sandbox.failed !== undefined ? { failed: sandbox.failed } : {}),
       failures,
       durationMs: sandbox.durationMs,
-      ...(sandbox.error || pyNote ? { error: [sandbox.error, pyNote].filter(Boolean).join("; ") } : {}),
+      ...(sandbox.error ? { error: sandbox.error } : {}),
       ...(sandbox.output ? { output: sandbox.output } : {}),
     },
     budget: {
@@ -154,8 +135,4 @@ export async function preflight(
 
 function pathLen(chain: string[] | undefined): number {
   return chain ? chain.length : Number.MAX_SAFE_INTEGER;
-}
-
-function isPythonFile(file: string): boolean {
-  return file.endsWith(".py") || file.endsWith(".pyi");
 }

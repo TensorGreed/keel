@@ -192,8 +192,12 @@ hatch auto-detection — namespace packages), and exports (def/class/assign, `__
 supported; the cache
 (format v2) holds mixed TS+Python repos in one graph — with **no cross-language edges yet** (files
 coexist; that's honest, see docs/architecture.md). `get_dependencies`/`get_impact`/`select_tests`
-work on Python (`test_*.py`/`*_test.py`/`tests/` selection); the sandbox sim runner stays TS/JS-only,
-so `preflight` returns a `runner-unsupported` status and `verdict` warns rather than pretending.
+work on Python (`test_*.py`/`*_test.py`/`tests/` selection). The sandbox now EXECUTES Python too:
+it picks the runner from the selected tests (pytest for Python, else vitest/jest/node), reuses the
+repo's virtualenv (`.venv`/`$VIRTUAL_ENV`), puts the worktree's module roots on `PYTHONPATH`, and
+parses the JUnit report with the `keel ci` parser. When pytest isn't installed for the chosen
+interpreter, `preflight` returns a distinct `runner-unavailable` status naming it (and `verdict`
+warns) rather than pretending.
 
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`

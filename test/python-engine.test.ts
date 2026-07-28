@@ -5,7 +5,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getImpact } from "../src/simulate/impact.js";
 import { changedRoots, selectTests } from "../src/simulate/select-tests.js";
-import { preflight } from "../src/simulate/preflight.js";
 import { loadGraph, loadHeadGraph, resetGraphCache } from "../src/graph/cache.js";
 import { reportFor } from "../src/graph/dependencies.js";
 import { initPythonScanner } from "../src/graph/python-scanner.js";
@@ -70,13 +69,7 @@ describe("pure-Python repo: impact, select_tests, preflight", () => {
     expect(sel.uncoveredChanges).toEqual([]);
   }, 15_000);
 
-  it("preflight reports runner-unsupported for Python rather than pretending", async () => {
-    const pf = await preflight(dir, { diff: BREAK_CALC });
-    if ("error" in pf) throw new Error(pf.error);
-    expect(pf.executed.status).toBe("runner-unsupported");
-    expect(pf.executed.error).toMatch(/python not yet supported/);
-    expect(pf.testsSelected).toEqual(["test_calc.py"]); // selection still works
-  }, 30_000);
+  // preflight EXECUTION on Python (pytest runner) is covered in pytest-runner.test.ts.
 });
 
 describe("incremental rescan of a .py file", () => {
