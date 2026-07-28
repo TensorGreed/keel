@@ -26,6 +26,12 @@ export interface FileGraph {
   importSymbols: Map<string, Map<string, Set<string>>>;
   /** file -> its exported names ("default"; "*" when it re-exports everything from another module) */
   exportsOf: Map<string, Set<string>>;
+  /**
+   * file -> import specifiers that did NOT resolve to an in-repo file (third-party packages, stdlib,
+   * or — the point of this — a package published by a *sibling repo* in a workspace). Retained here
+   * so the workspace layer can resolve cross-repo edges without re-scanning (see src/workspace/).
+   */
+  externalImports: Map<string, Set<string>>;
   /** all scanned source files */
   files: string[];
 }
@@ -75,10 +81,12 @@ interface FileScan {
   imports: Set<string>;
   importSymbols: Map<string, Set<string>>;
   exports: Set<string>;
+  /** specifiers that resolved to nothing in-repo (candidates for cross-repo resolution) */
+  external: Set<string>;
 }
 
 function emptyScan(): FileScan {
-  return { imports: new Set(), importSymbols: new Map(), exports: new Set() };
+  return { imports: new Set(), importSymbols: new Map(), exports: new Set(), external: new Set() };
 }
 
 /** extension -> the scanner that owns it (first scanner wins on overlap). */
@@ -107,9 +115,13 @@ function scanFile(byExtension: Map<string, LanguageScanner>, root: string, absFi
   const result = scanner.scanFile(absFile, content);
   const imports = new Set<string>();
   const importSymbols = new Map<string, Set<string>>();
+  const external = new Set<string>();
   for (const { specifier, symbols } of result.imports) {
     const resolved = scanner.resolveImport(specifier, absFile);
-    if (!resolved) continue;
+    if (!resolved) {
+      external.add(specifier); // no in-repo target — a third-party package, or a workspace sibling's
+      continue;
+    }
     // A specifier resolves to one file (TS/Python) or many (a Go package's files). Edge to each.
     for (const target of Array.isArray(resolved) ? resolved : [resolved]) {
       const rel = toRepoRelative(root, target);
@@ -123,7 +135,7 @@ function scanFile(byExtension: Map<string, LanguageScanner>, root: string, absFi
       for (const symbol of symbols) set.add(symbol);
     }
   }
-  return { imports, importSymbols, exports: result.exports };
+  return { imports, importSymbols, exports: result.exports, external };
 }
 
 /** Invert file -> imports into file -> importedBy (importedBy is fully derived). */
@@ -149,6 +161,7 @@ export function buildFileGraph(repoRoot: string): FileGraph {
   const imports = new Map<string, Set<string>>();
   const importSymbols = new Map<string, Map<string, Set<string>>>();
   const exportsOf = new Map<string, Set<string>>();
+  const externalImports = new Map<string, Set<string>>();
   const relFiles: string[] = [];
 
   for (const file of listSourceFiles(root)) {
@@ -158,6 +171,7 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     imports.set(rel, scan.imports);
     importSymbols.set(rel, scan.importSymbols);
     exportsOf.set(rel, scan.exports);
+    if (scan.external.size > 0) externalImports.set(rel, scan.external);
   }
 
   // Spring DI enrichment: add the runtime wiring edges imports can't express (interface →
@@ -171,6 +185,7 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     importedBy: invertImports(imports),
     importSymbols,
     exportsOf,
+    externalImports,
     files: relFiles.sort(),
   };
 }
@@ -197,15 +212,18 @@ export function updateFileGraph(
   const imports = new Map(base.imports);
   const importSymbols = new Map(base.importSymbols);
   const exportsOf = new Map(base.exportsOf);
+  const externalImports = new Map(base.externalImports);
 
   for (const rel of modifiedFiles) {
     const scan = scanFile(byExtension, root, path.resolve(root, rel)) ?? emptyScan();
     imports.set(rel, scan.imports);
     importSymbols.set(rel, scan.importSymbols);
     exportsOf.set(rel, scan.exports);
+    if (scan.external.size > 0) externalImports.set(rel, scan.external);
+    else externalImports.delete(rel);
   }
 
-  return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, files: base.files };
+  return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, files: base.files };
 }
 
 /** Everything that transitively depends on `file` — the blast radius of changing it. */
@@ -264,8 +282,8 @@ export function isGraphSourcePath(relPosixPath: string): boolean {
 
 /** On-disk graph format; bump when the serialized shape changes OR when the edges a build produces
  *  change, so stale caches are dropped. v2: multi-language graphs (v1 was TS/JS-only). v3: Spring DI
- *  edges (a v2 cache lacks them) — bumping invalidates cleanly. */
-export const GRAPH_FORMAT_VERSION = 3;
+ *  edges. v4: retained external import specifiers (for cross-repo workspace resolution). */
+export const GRAPH_FORMAT_VERSION = 4;
 
 export interface SerializedFileGraph {
   version: number;
@@ -273,6 +291,7 @@ export interface SerializedFileGraph {
   imports: [string, string[]][];
   importSymbols: [string, [string, string[]][]][];
   exportsOf: [string, string[]][];
+  externalImports: [string, string[]][];
 }
 
 /** Convert a FileGraph to a JSON-serializable form (Maps/Sets -> arrays). importedBy is
@@ -287,6 +306,7 @@ export function serializeFileGraph(graph: FileGraph): SerializedFileGraph {
       [...byTarget].map(([target, symbols]) => [target, [...symbols]]),
     ]),
     exportsOf: [...graph.exportsOf].map(([file, names]) => [file, [...names]]),
+    externalImports: [...graph.externalImports].map(([file, specs]) => [file, [...specs]]),
   };
 }
 
@@ -296,7 +316,10 @@ export function deserializeFileGraph(data: unknown): FileGraph | null {
   if (typeof data !== "object" || data === null) return null;
   const d = data as Partial<SerializedFileGraph>;
   if (d.version !== GRAPH_FORMAT_VERSION) return null;
-  if (!Array.isArray(d.files) || !Array.isArray(d.imports) || !Array.isArray(d.importSymbols) || !Array.isArray(d.exportsOf)) {
+  if (
+    !Array.isArray(d.files) || !Array.isArray(d.imports) || !Array.isArray(d.importSymbols) ||
+    !Array.isArray(d.exportsOf) || !Array.isArray(d.externalImports)
+  ) {
     return null;
   }
   try {
@@ -312,7 +335,10 @@ export function deserializeFileGraph(data: unknown): FileGraph | null {
     const exportsOf = new Map<string, Set<string>>(
       d.exportsOf.map(([file, names]) => [file, new Set(names)]),
     );
-    return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, files: d.files };
+    const externalImports = new Map<string, Set<string>>(
+      d.externalImports.map(([file, specs]) => [file, new Set(specs)]),
+    );
+    return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, files: d.files };
   } catch {
     return null;
   }

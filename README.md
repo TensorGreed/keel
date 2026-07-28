@@ -76,9 +76,13 @@ compile error surfaces as a failure). Working today:
   `keel report` gives repo-wide reports: `--arch` lists import-rule violations (adopt rules on a
   legacy repo), `--hotspots` ranks files by risk = churn × blast radius × coverage gap
 - `get_history` — git history for any path
+- `keel workspace` — **one dependency graph spanning several repos**. A `keel.workspace.json` lists
+  member repos; keel merges their graphs and adds cross-repo edges (a shared package imported by
+  name resolves to the sibling repo that publishes it — TS by package.json name, Python/Go by the
+  sibling's own resolver), so blast radius crosses repo boundaries. `keel workspace impact
+  shared::src/index.ts` shows the services in other repos a change would affect.
 
-See [docs/roadmap.md](docs/roadmap.md) for what's next (Phase 5 — widen: Python via
-tree-sitter, a CI connector + flaky-test detection, ADR ingestion, cross-repo workspaces).
+See [docs/roadmap.md](docs/roadmap.md) for what's shipped and next.
 
 ## Quick start
 

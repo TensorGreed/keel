@@ -1,0 +1,10 @@
+{
+  "repos": [
+    { "path": "./ts-lib" },
+    { "path": "./ts-app" },
+    { "path": "./py-lib" },
+    { "path": "./py-app" },
+    { "path": "./go-lib" },
+    { "path": "./go-app" }
+  ]
+}

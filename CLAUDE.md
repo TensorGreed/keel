@@ -63,7 +63,11 @@ src/
                     scanner.ts (LanguageScanner interface), typescript-scanner.ts (TS compiler
                     API), python-scanner.ts (web-tree-sitter WASM, grammar in graph/wasm/),
                     scanners.ts (registry by extension + async init), dependencies.ts (walk +
-                    resolve + assemble), cache.ts (incremental, git-HEAD-keyed graph cache)
+                    resolve + assemble), cache.ts (incremental, git-HEAD-keyed graph cache),
+                    spring.ts (Java DI edges), go-scanner.ts / java-scanner.ts (WASM scanners)
+  workspace/        Cross-repo graph: config.ts (keel.workspace.json), graph.ts (merge member
+                    graphs, namespace as name::path, add cross-repo edges), cli.ts (`keel
+                    workspace`). Graph/impact layer only — execution/decisions/tools stay single-repo
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests),
@@ -281,3 +285,16 @@ not flagged). The `flaky_tests` MCP tool lists them with evidence; the trust lay
 flaky failure — a `verdict` whose only sim failures are known-flaky warns instead of blocking
 (`facts.ts` annotates each failure via the flaky matcher). No model calls; graph/sim value still
 works with zero CI data (flaky detection just returns empty and nothing is discounted).
+
+**Cross-repo workspaces** are the final Phase 5 item (`src/workspace/`). A `keel.workspace.json`
+lists member repos; `keel workspace` builds one graph over them, namespacing each file as
+`name::path` and adding the edges that cross repo boundaries. The enabling change is in the per-repo
+composer: it now retains each file's **external import specifiers** (the ones that resolved to
+nothing in-repo) — `FileGraph.externalImports`, serialized (graph format **v4**). A cross-repo edge
+is one member's external specifier matched to what a sibling publishes: TS/JS by package.json
+`name` → the package's source entry (mapping a `dist/` manifest entry back to `src/`); Python and Go
+by **reusing the sibling repo's own resolver** (absolute imports resolve against that repo's
+roots/modules). Edges route by the importing file's language, so no cross-language false matches.
+Blast radius crosses repos (`keel workspace impact name::file`). Deterministic, no model calls;
+Java cross-repo (jars) deferred. Scope: graph/impact only — execution, decisions, and MCP tools
+stay single-repo this pass.

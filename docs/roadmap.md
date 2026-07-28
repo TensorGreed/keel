@@ -125,7 +125,12 @@ Goal: the same substrate over more languages, more sources, and more than one re
       add`), linked to graph nodes by repo-relative paths in the body (unlinked ones still surface
       via question search). Idempotent by path + content hash; edits re-ingest. No model calls in
       ingestion; embedding stays best-effort
-- [ ] Cross-repo workspaces: one graph spanning multiple repos/services
+- [x] Cross-repo workspaces: one graph spanning multiple repos/services. `keel.workspace.json`
+      lists member repos; the graph loads each member's own graph, namespaces files as `name::path`,
+      and adds cross-repo edges — a member's external (unresolved-in-repo) import matched to what a
+      sibling publishes: TS/JS by package.json name→source entry, Python/Go by reusing the sibling's
+      resolver. Blast radius crosses repos; queried via `keel workspace [impact|deps]`. Execution,
+      decisions, and MCP tools stay single-repo this pass (Java cross-repo deferred)
 
 ## Later
 

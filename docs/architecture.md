@@ -94,6 +94,24 @@ Python service shelling out to a Node script, or an FFI boundary). That's honest
 aren't import edges and inferring them reliably is future work. Within each language the graph
 is complete; across languages, files simply sit side by side.
 
+**Cross-repo workspaces — one graph spanning several repos** (`src/workspace/`). A
+`keel.workspace.json` lists member repos; the workspace graph loads each member's own file graph
+(unchanged, cached per repo), namespaces every file as `name::path`, and adds the edges that cross
+repo boundaries. The primitive that makes this possible: the per-repo composer now *retains* each
+file's **external import specifiers** — the ones that resolved to nothing in-repo (a third-party
+package, or a sibling repo's published package). A cross-repo edge is one member's external
+specifier matched against what a sibling *publishes*, resolved deterministically per language:
+TS/JS by package.json `name` → the package's source entry (JS resolution is name-based, so the
+sibling's own resolver can't see it — keel reads the manifest and maps a `dist/` entry back to
+`src/`); Python and Go by **reusing the sibling repo's own resolver** (an absolute import resolves
+against that repo's roots/modules exactly as an in-repo import would, so the sibling already answers
+"do I provide this?"). Edges are routed by the importing file's language, so a TS specifier never
+matches a Python publisher. Blast radius and impact then cross repo boundaries — changing a shared
+library's file shows the services in other repos it affects. Deterministic, no model calls; Java
+cross-repo (published jars → artifact coordinates) is out of scope for this pass. Scope boundary:
+this is the graph/impact layer — **execution (the sandbox), decisions, and the MCP tools remain
+single-repo**; the workspace graph is queried through the `keel workspace` CLI.
+
 **Execution now covers TS/JS, Python, Go, and Java.** Graph analysis, impact, and test selection are
 language-agnostic (`test_*.py` / `*_test.py` / `tests/` for Python; `*_test.go` for Go; the test
 source root plus `*Test.java` / `*Tests.java` / `Test*.java` for Java). The sandbox runner picks the
