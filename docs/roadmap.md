@@ -119,7 +119,12 @@ Goal: the same substrate over more languages, more sources, and more than one re
         idempotent; a flipped re-run on one commit is a distinct observation)
   - [x] Flaky detection: a test that both passed and failed on the same commit (`flaky_tests`
         tool); the verdict discounts a flaky-only sim failure to a warn instead of blocking
-- [ ] ADR ingestion into the decision index: Markdown ADRs as first-class decision records
+- [x] ADR ingestion into the decision index: Markdown ADRs as first-class decision records.
+      `keel ingest` gains a local source (docs/adr/**, docs/decisions/**) — MADR-parsed (title/
+      status/context/decision), stored as origin "adr" (ranked above mined, below `keel decision
+      add`), linked to graph nodes by repo-relative paths in the body (unlinked ones still surface
+      via question search). Idempotent by path + content hash; edits re-ingest. No model calls in
+      ingestion; embedding stays best-effort
 - [ ] Cross-repo workspaces: one graph spanning multiple repos/services
 
 ## Later

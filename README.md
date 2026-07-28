@@ -53,8 +53,10 @@ compile error surfaces as a failure). Working today:
 - `preflight` — validate a diff, apply it in an isolated worktree, and run the covering
   tests under hard budget caps: **executed** pass/fail with traces and the graph path from
   each failure back to the change
-- `why` — the decision behind a file or answer to a question, with PR source receipts
-  (`keel ingest` + `keel mine` populate it; `keel decision add`/`reject` for human overrides)
+- `why` — the decision behind a file or answer to a question, with source receipts (a PR, or an
+  ADR file). `keel ingest` populates it from **ADRs** (docs/adr, docs/decisions — local, no network)
+  and GitHub PRs; `keel mine` extracts decisions from PR threads; `keel decision add`/`reject` are
+  human overrides. Ranked human pin > ADR > mined.
 - `context` — a one-call briefing for a task: the candidate files, each with blast radius,
   covering tests, recent history, linked decisions, and owners, plus rolled-up suggested tests
   and risk flags (uncovered / high-blast-radius / protected-path / top-hotspot). Composition

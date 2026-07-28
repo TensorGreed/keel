@@ -4,7 +4,7 @@
  *
  *   keel [serve]   start the MCP server over stdio (default) — see serve.ts
  *   keel init      register keel in a project's .mcp.json      — see init.ts
- *   keel ingest    backfill GitHub PRs into the event log      — see github/cli.ts
+ *   keel ingest    ADRs (local) + GitHub PRs into the event log — see github/cli.ts
  *   keel mine      extract decision records from PR threads    — see mining/cli.ts
  *   keel decision  add/reject human decision overrides         — see mining/decision-cli.ts
  *   keel ci        ingest JUnit CI reports into the event log   — see ci/cli.ts
@@ -21,7 +21,7 @@ const HELP = `keel — development intelligence layer, delivered as an MCP serve
 Usage:
   keel [serve]   start the MCP server over stdio (default)
   keel init      register keel in this project's .mcp.json
-  keel ingest    backfill GitHub PRs + review threads into the event log
+  keel ingest    ingest ADRs (docs/adr, docs/decisions) locally, plus GitHub PRs
   keel mine      extract decision records from ingested PR threads (offline model)
   keel decision  record a human decision (add) or reject a mined one
   keel ci        ingest JUnit test reports from a CI run (for flaky-test detection)

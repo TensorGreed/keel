@@ -207,6 +207,23 @@ export class SqliteEventStore implements EventStore {
     return new Map(rows.map((r) => [r.externalId, r.updatedAt]));
   }
 
+  /**
+   * Remove an event and its dependent rows (linked files, embedding). The schema has no ON DELETE
+   * CASCADE, so we clean up explicitly. Used to re-ingest an edited source (an ADR whose content
+   * changed) — delete the stale event, then append the new one.
+   */
+  deleteEvent(kind: EventKind, externalId: string): void {
+    this.transaction(() => {
+      const row = this.db.prepare("SELECT id FROM events WHERE kind = ? AND external_id = ?").get(kind, externalId) as
+        | { id: number | bigint }
+        | undefined;
+      if (!row) return;
+      this.db.prepare("DELETE FROM embeddings WHERE event_id = ?").run(row.id);
+      this.db.prepare("DELETE FROM event_files WHERE event_id = ?").run(row.id);
+      this.db.prepare("DELETE FROM events WHERE id = ?").run(row.id);
+    });
+  }
+
   /** Mark a decision suppressed (a human "reject"); kept in the log, excluded from results. */
   suppressDecision(externalId: string): void {
     this.db.prepare("INSERT OR IGNORE INTO suppressed_decisions (external_id) VALUES (?)").run(externalId);

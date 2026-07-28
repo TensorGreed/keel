@@ -68,9 +68,12 @@ src/
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests),
                     preflight.ts (impact -> select -> sandbox, budgeted)
-  github/           `keel ingest`: backfill PRs + review threads into the event log
-                    (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps);
-                    check.ts publishes a verdict as a GitHub check run (verdict --github-check)
+  github/           `keel ingest` (GitHub half): backfill PRs + review threads into the event log
+                    (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps); cli.ts also
+                    drives the local ADR source; check.ts publishes a verdict as a GitHub check run
+  adr/              `keel ingest` (local half): parse.ts (MADR: title/status/context/decision) +
+                    ingest.ts (docs/adr, docs/decisions → origin "adr" decision events, linked to
+                    graph nodes, idempotent by path+hash). No model calls; embedding is best-effort.
   ci/               `keel ci`: ingest JUnit test reports into ci_run events (junit.ts parser,
                     ingest.ts ETL, cli.ts — no deps). Feeds flaky-test detection. No model calls.
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
@@ -135,6 +138,16 @@ the model for a no-decision PR. Model calls happen only here (offline) plus a lo
 embedding in the server. The `why` MCP tool answers "why is this like this?" for a file or
 question, linking decisions through the graph with PR source receipts; `keel decision
 add`/`reject` gives humans an override that outranks or suppresses mined records.
+
+ADR ingestion (the last Phase 5 item) makes `keel ingest` dual-source: the GitHub half above, plus
+a **local** half (`src/adr/`) that ingests Markdown ADRs under docs/adr/ and docs/decisions/ — no
+network, repo-only value. They're MADR-parsed (title/status/context/decision) into decision events
+with origin **"adr"**, ranked above mined records but below an explicit `keel decision add` (an ADR
+is human-authored but not a keel-specific override); linked to graph nodes by repo-relative paths in
+the body (unlinked ADRs still surface via question search); idempotent by path + content hash, with
+edits re-ingesting (a new `deleteEvent` on the store replaces the stale event). No model calls in
+ingestion — embedding stays the offline best-effort path, like every other decision. Receipts are
+the ADR file path + title.
 
 Phase 3 (trust layer) is complete. The `verdict` MCP tool composes the earlier facts —
 blast radius, the executed preflight sim, uncovered changes, and decisions the change may

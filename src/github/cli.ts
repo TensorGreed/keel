@@ -1,22 +1,28 @@
 /**
- * `keel ingest` — backfill GitHub PRs + review threads into the event log. Lazy-loaded from
- * index.ts so it doesn't pull in SQLite/fetch unless invoked.
+ * `keel ingest` — populate the event log. Two sources: a LOCAL one that always runs (ADRs under
+ * docs/adr and docs/decisions — repo-only value, no network), and GitHub PRs + review threads when
+ * a remote resolves. Lazy-loaded from index.ts so it doesn't pull in SQLite/fetch unless invoked.
  */
 import * as path from "node:path";
+import { ingestAdrs } from "../adr/ingest.js";
+import { loadGraph } from "../graph/cache.js";
+import { embedDecisions, OllamaEmbeddingModel } from "../retrieval/embed.js";
 import { SqliteEventStore } from "../events/sqlite-store.js";
 import { FetchGitHubClient } from "./client.js";
 import { ingestGitHub } from "./ingest.js";
 import { resolveRepoRef } from "./remote.js";
 
-const INGEST_HELP = `keel ingest — backfill GitHub PRs + review threads into the event log
+const INGEST_HELP = `keel ingest — populate the event log from ADRs (local) and GitHub PRs
 
 Usage: keel ingest [--repo owner/repo] [--max-pages N]
 
-  --repo owner/repo   the repo to ingest (default: the origin remote)
+  --repo owner/repo   the GitHub repo to ingest (default: the origin remote)
   --max-pages N       PR-list pages per run (default 10 / KEEL_INGEST_MAX_PAGES)
 
-Auth: set GITHUB_TOKEN for higher rate limits; without it, public repos work
-at 60 requests/hour. Safe to re-run — it resumes from where it left off.`;
+ADRs under docs/adr/ and docs/decisions/ are ingested locally on every run — no
+network or remote needed. GitHub PR ingestion also runs when a remote resolves;
+set GITHUB_TOKEN for higher rate limits (public repos work at 60 requests/hour).
+Safe to re-run — both sources resume from where they left off.`;
 
 /** Emit to stderr — stdout stays clean for the summary line. */
 function warn(message: string): void {
@@ -56,21 +62,31 @@ export async function runIngest(argv: string[]): Promise<number> {
   }
 
   const repoRoot = path.resolve(process.env["KEEL_REPO"] ?? process.cwd());
-  const ref = await resolveRepoRef(repoRoot, repoOverride);
-  if ("error" in ref) {
-    warn(`ingest failed: ${ref.error}`);
-    return 1;
-  }
-
-  const token = process.env["GITHUB_TOKEN"];
-  if (!token) {
-    warn("no GITHUB_TOKEN: ingesting unauthenticated (public repos only, 60 requests/hour). Set GITHUB_TOKEN for higher limits.");
-  }
-
   const store = new SqliteEventStore(path.join(repoRoot, ".keel", "events.db"));
   try {
-    const result = await ingestGitHub(store, new FetchGitHubClient(token), ref, maxPages !== undefined ? { maxPages } : {});
+    // --- local source: ADRs (always, no network) ---
+    const { graph } = await loadGraph(repoRoot);
+    const adr = await ingestAdrs(store, repoRoot, new Set(graph.files));
+    console.log(
+      `[keel] ADRs: ${adr.ingested} ingested, ${adr.unchanged} unchanged (${adr.scanned} scanned, ${adr.linked} linked to code)`,
+    );
+    if (adr.ingested > 0) {
+      // Best-effort local embedding so ADRs are semantically searchable too (offline; never fatal).
+      const embed = await embedDecisions(store, new OllamaEmbeddingModel(process.env["KEEL_EMBED_MODEL"], process.env["KEEL_OLLAMA_URL"]));
+      if (embed.error) warn(`ADRs not embedded (${embed.error}); keyword search still works, 'keel mine' can embed later`);
+    }
 
+    // --- GitHub PRs (only when a remote resolves) ---
+    const ref = await resolveRepoRef(repoRoot, repoOverride);
+    if ("error" in ref) {
+      warn(`skipping GitHub ingest (${ref.error}); ADRs ingested locally`);
+      return 0;
+    }
+    const token = process.env["GITHUB_TOKEN"];
+    if (!token) {
+      warn("no GITHUB_TOKEN: ingesting unauthenticated (public repos only, 60 requests/hour). Set GITHUB_TOKEN for higher limits.");
+    }
+    const result = await ingestGitHub(store, new FetchGitHubClient(token), ref, maxPages !== undefined ? { maxPages } : {});
     console.log(
       `[keel] ${result.mode}: ingested ${result.ingested} new event(s) from ${result.prs} PR(s) ` +
         `and ${result.reviewComments} review comment(s) in ${result.repo}`,

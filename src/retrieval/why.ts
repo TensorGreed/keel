@@ -15,13 +15,15 @@ import type { RepoRef } from "../github/remote.js";
 import { cosineSimilarity, decisionText, EmbeddingError, type EmbeddingModel } from "./embed.js";
 import { decisionsForFile, searchDecisions } from "./index.js";
 
-export type DecisionOrigin = "mined" | "human";
+export type DecisionOrigin = "mined" | "human" | "adr";
 
 export interface WhySource {
   pr: number | null;
   url: string | null;
   author: string | null;
   date: string | null;
+  /** the ADR file this decision came from — present only for origin "adr" */
+  adrPath?: string;
 }
 
 export interface WhyDecision {
@@ -58,7 +60,8 @@ interface Candidate {
 }
 
 function originOf(decision: KeelEvent): DecisionOrigin {
-  return decision.payload["origin"] === "human" ? "human" : "mined";
+  const origin = decision.payload["origin"];
+  return origin === "human" ? "human" : origin === "adr" ? "adr" : "mined";
 }
 
 /** Tokens of length > 2, lowercased. */
@@ -143,8 +146,11 @@ export async function answerWhy(
   return { decisions, searched, notes };
 }
 
+// A human `keel decision add` is a keel-specific override and wins; an ADR is human-authored but not
+// keel-specific, so it outranks a mined record but yields to a pin.
+const ORIGIN_RANK: Record<DecisionOrigin, number> = { human: 0, adr: 1, mined: 2 };
 function originRank(decision: KeelEvent): number {
-  return originOf(decision) === "human" ? 0 : 1; // human overrides win
+  return ORIGIN_RANK[originOf(decision)];
 }
 
 /** Score a fixed candidate set by the question — semantic if possible, else keyword. */
@@ -209,10 +215,12 @@ async function searchOrKeyword(
       .filter((c) => c.score > 0);
   }
 
-  // Guarantee human decisions surface even if unembedded: union any human keyword matches.
+  // Guarantee human-authored decisions surface even if unembedded (semantic search only ranks
+  // embedded records): union any human or ADR keyword matches not already present.
   const present = new Set(candidates.map((c) => c.decision.externalId));
   for (const d of allDecisions) {
-    if (originOf(d) === "human" && !present.has(d.externalId) && keywordScore(d, qt) > 0) {
+    const origin = originOf(d);
+    if ((origin === "human" || origin === "adr") && !present.has(d.externalId) && keywordScore(d, qt) > 0) {
       candidates.push({ decision: d, reason: "keyword", score: keywordScore(d, qt) });
     }
   }
@@ -232,7 +240,10 @@ export function decisionReceipt(decision: KeelEvent, matchReason: string, repoRe
   const p = decision.payload;
   const prNumber = typeof p["prNumber"] === "number" ? p["prNumber"] : null;
   const explicitUrl = typeof p["prUrl"] === "string" ? p["prUrl"] : null;
-  const url = explicitUrl ?? (repoRef && prNumber !== null ? `https://github.com/${repoRef.owner}/${repoRef.repo}/pull/${prNumber}` : null);
+  const adrPath = typeof p["adrPath"] === "string" ? p["adrPath"] : null;
+  // An ADR's receipt is its file path; a mined/pinned decision's is its PR (explicit URL, or built
+  // from owner/repo + number).
+  const url = explicitUrl ?? adrPath ?? (repoRef && prNumber !== null ? `https://github.com/${repoRef.owner}/${repoRef.repo}/pull/${prNumber}` : null);
   return {
     id: decision.externalId ?? "",
     summary: typeof p["summary"] === "string" ? p["summary"] : (decision.title ?? ""),
@@ -246,6 +257,7 @@ export function decisionReceipt(decision: KeelEvent, matchReason: string, repoRe
       url,
       author: decision.actor ?? (typeof p["author"] === "string" ? p["author"] : null),
       date: decision.occurredAt,
+      ...(adrPath ? { adrPath } : {}),
     },
     files: decision.files ?? [],
   };
