@@ -68,7 +68,13 @@ export class FetchGitHubClient implements GitHubClient {
     }
     const rateLimit = parseRateLimit(res.headers);
     if (!res.ok) {
-      throw new GitHubError(res.status, await errorMessage(res), rateLimit);
+      let message = await errorMessage(res);
+      if (res.status === 401 && this.token) {
+        // Bad credentials with a token set almost always means the token itself is wrong,
+        // not the request — point the user at GITHUB_TOKEN rather than relaying git-speak.
+        message += " — your GITHUB_TOKEN appears invalid or expired; check it (or unset it to use unauthenticated access)";
+      }
+      throw new GitHubError(res.status, message, rateLimit);
     }
     const data = (await res.json()) as T;
     return { data, nextPage: parseNextLink(res.headers.get("link")), rateLimit };
