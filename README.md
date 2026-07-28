@@ -1,5 +1,7 @@
 # Keel
 
+[![CI](https://github.com/TensorGreed/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/TensorGreed/keel/actions/workflows/ci.yml)
+
 **Your codebase, with memory and foresight.**
 
 Keel is a development intelligence layer for the agent era, delivered as an MCP server.
@@ -17,6 +19,18 @@ change it, or *whether a change is safe to automate*. Keel answers those three q
 All three run on one substrate: an event log, a system graph, and a decision index.
 See [docs/concept.md](docs/concept.md) for the vision and
 [docs/architecture.md](docs/architecture.md) for the design.
+
+## See it work
+
+Pointed at [honojs/hono](https://github.com/honojs/hono) (381 source files), from a cold start:
+
+- **What depends on `Context`?** → `get_dependencies` returns a blast radius of **196 files** in **~0.3s**.
+- **What breaks if cookie parsing is off by one char?** → `preflight` **executes** the covering
+  tests and returns **43 real failures across 6 files in ~1.8s**, each with the graph path from
+  the failing test back to the change.
+- **Is it safe to merge?** → `keel verdict` returns **BLOCK** (exit 2), naming the failing tests.
+
+Full walkthrough with copy-pasteable commands: **[docs/demo.md](docs/demo.md)**.
 
 ## Status
 
@@ -43,28 +57,30 @@ cross-repo graphs, CI/Jira/incident connectors).
 
 ## Quick start
 
+Requires Node ≥ 22. In the repo you want Keel to understand:
+
 ```bash
+npx -y @tensorgreed/keel init   # registers keel in this repo's .mcp.json
+```
+
+Restart Claude Code (or your MCP client), then ask things like *"what's the blast radius of
+changing src/config.ts?"* — it will call Keel and answer from the graph. `keel init` detects
+whether the `keel` binary is on your PATH and otherwise wires the config to run via `npx`, so
+there's nothing to install globally.
+
+### From source (contributors, or before the npm release)
+
+```bash
+git clone https://github.com/TensorGreed/keel.git
+cd keel
 npm install
 npm run build
 npm test
+node dist/index.js init --command "node ./dist/index.js"   # point a repo at this build
 ```
 
-Register with Claude Code (in your target repo's `.mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "keel": {
-      "command": "node",
-      "args": ["/path/to/keel/dist/index.js"],
-      "env": { "KEEL_REPO": "." }
-    }
-  }
-}
-```
-
-Then ask your agent things like *"what's the blast radius of changing src/config.ts?"*
-— it will call Keel and answer from the graph.
+This repo dogfoods itself: its own `.mcp.json`, `keel.policy.json`, and a `verdict` Stop hook
+(`.claude/settings.json`) gate every change to Keel with Keel.
 
 ## Principles
 
