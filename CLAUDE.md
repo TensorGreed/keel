@@ -13,7 +13,12 @@ are currently building.
    facts; the expensive reasoning happens in the caller's own agent session (Claude Code,
    Copilot, Cursor). If a feature seems to need deep server-side reasoning, redesign it to
    hand context to the caller instead. Cheap/local models (Ollama, batch Haiku-class) are
-   permitted only in offline ingestion pipelines (decision mining, embeddings).
+   permitted in offline ingestion pipelines (decision mining, embeddings). One narrow
+   exception at query time in the MCP server: a **local** embedding model (Ollama) may be
+   called to embed a query for semantic retrieval — it is free, private, and non-generative.
+   Remote or generative model calls remain forbidden server-side, and every query path that
+   uses a local model must degrade gracefully (a fallback, never an error or a hang) when no
+   local model is reachable.
 2. **Deterministic core.** The system graph, event log, and simulator are static analysis,
    ETL, and sandboxed execution — never LLM guesses. An answer from Keel must be
    reproducible and, where it claims something breaks, backed by an executed test.
