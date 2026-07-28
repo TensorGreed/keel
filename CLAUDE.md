@@ -55,7 +55,7 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
-                    select_tests, preflight, why, verdict, get_history)
+                    select_tests, preflight, why, verdict, context, get_history)
   graph/            System graph: import/dependency scanning (TS compiler API);
                     cache.ts is the incremental, git-HEAD-keyed graph cache
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
@@ -71,6 +71,9 @@ src/
   retrieval/        Decision index: embed.ts (local embeddings, injectable),
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
                     composition — file links + semantic/keyword, human overrides, receipts)
+  context/          briefing.ts: the `context` tool — resolve a task's candidate files, then
+                    compose blast radius + history + decisions + tests + policy risks (ranked,
+                    capped, keyword-fallback like why). No generative calls.
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
                     machine-checkable facts), policy.ts (keel.policy.json, pure eval +
                     glob), verdict.ts (pass/warn/block with audited reasons),
@@ -131,3 +134,12 @@ failing verdict, honors `stop_hook_active`; see `recipes/claude-code-hook.md`), 
 `github/check.ts` (base-checkout + forward-diff recipe in `recipes/github-check.md`). Pure
 evaluation, no model calls (`src/trust/`); the check is ETL plumbing (a REST POST), also no
 model calls.
+
+Phase 4 (compose) is underway. The `context` MCP tool (`src/context/briefing.ts`) is the first
+item: one call takes a free-text task (plus any files the caller already knows) and returns a
+briefing — the candidate files ranked by relevance, each with blast radius + key dependents,
+recent history, linked decisions with receipts, and covering tests; rolled up into
+suggestedTests, relevantDecisions (human-first), and risks (uncovered / high-blast-radius /
+protected-path, the last two read from keel.policy.json). Pure composition of the existing
+engines; ranking uses the same local query embedding as `why` with the identical keyword
+fallback, and every truncation is stated in `notes`. No generative calls.

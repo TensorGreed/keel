@@ -50,7 +50,32 @@ Goal: policy verdicts that let agents take bigger changes safely.
 - [x] `verdict` MCP tool; GitHub check integration (`keel verdict --github-check`, recipes/github-check.md)
 - [x] Claude Code hook recipe: `keel verdict` as a Stop hook (recipes/claude-code-hook.md)
 
+## Phase 4 — Compose: more value from the substrate
+
+Goal: higher-order tools that compose the graph, sim, and decision index into answers a
+caller would otherwise assemble by hand. **Demo:** "brief me on this task" returns the files,
+tests, decisions, and risks for a change before a line is written.
+
+- [x] Context briefing tool: one call maps a task to its candidate files, blast radius, tests,
+      decisions, and risks (compose get_dependencies + why + select_tests, ranked)
+- [ ] Architectural import rules in policy + verdict: forbidden `from`→`to` edges block a
+      change that introduces or retains them; repo-wide violations reported for adoption
+- [ ] Risk hotspot report: rank files by blast radius × churn × uncovered, so review attention
+      goes where a change is most likely to bite
+- [ ] Reviewer / ownership signal: who has touched the impacted files (history + CODEOWNERS),
+      surfaced as a suggested-reviewer fact on a change
+
+## Phase 5 — Widen
+
+Goal: the same substrate over more languages, more sources, and more than one repo.
+**Demo:** graph + sim answers on a Python service, with decisions mined from its ADRs.
+
+- [ ] Python support: tree-sitter graph extraction alongside the TS compiler API
+- [ ] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
+      non-deterministically so the sim can discount them
+- [ ] ADR ingestion into the decision index: Markdown ADRs as first-class decision records
+- [ ] Cross-repo workspaces: one graph spanning multiple repos/services
+
 ## Later
 
-More languages (tree-sitter), cross-repo/service graphs, CI + Jira + incident
-connectors, team deployment, policy sharing.
+Team deployment, policy sharing, incident + Jira connectors, service-level graphs.

@@ -45,6 +45,9 @@ for TypeScript/JavaScript repos:
   each failure back to the change
 - `why` — the decision behind a file or answer to a question, with PR source receipts
   (`keel ingest` + `keel mine` populate it; `keel decision add`/`reject` for human overrides)
+- `context` — a one-call briefing for a task: the candidate files, each with blast radius,
+  covering tests, recent history, and linked decisions, plus rolled-up suggested tests and
+  risk flags (uncovered / high-blast-radius / protected-path). Composition only, no LLM calls
 - `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
   radius, the executed sim, coverage, and affected decisions against `keel.policy.json`.
   Also runs from the shell as `keel verdict`: exit codes for CI, `--hook` to gate Claude Code

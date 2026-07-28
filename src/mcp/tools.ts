@@ -16,6 +16,8 @@ import { answerWhy } from "../retrieval/why.js";
 import { OllamaEmbeddingModel } from "../retrieval/embed.js";
 import { resolveRepoRef } from "../github/remote.js";
 import { computeVerdict } from "../trust/verdict.js";
+import { buildContext } from "../context/briefing.js";
+import { loadPolicy, DEFAULT_POLICY } from "../trust/policy.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -31,6 +33,7 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
   if (store) {
     registerWhy(server, repoRoot, store);
     registerVerdict(server, repoRoot, store);
+    registerContext(server, repoRoot, store);
   }
 
   server.tool(
@@ -191,6 +194,60 @@ function registerWhy(server: McpServer, repoRoot: string, store: SqliteEventStor
         return json(result);
       } catch (err) {
         return json({ error: `why failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** One-call task briefing: candidate files, blast radius, tests, decisions, and risks. */
+function registerContext(server: McpServer, repoRoot: string, store: SqliteEventStore): void {
+  server.tool(
+    "context",
+    "Brief a coding task before touching it: given a free-text task (and optionally files you " +
+      "already know are involved), resolve the candidate files and, for each, return its blast " +
+      "radius + key dependents, recent history, linked decisions (with PR receipts), and covering " +
+      "tests. Rolls up suggestedTests, relevantDecisions (human-recorded first), and risks " +
+      "(uncovered / high-blast-radius / protected-path). Pure composition of the graph, git, the " +
+      "decision index, and keel.policy.json — no generative calls; ranking uses the same LOCAL " +
+      "embedding as `why` and falls back to keyword. Capped to the top N candidates (default 8); " +
+      "everything truncated is stated in notes.",
+    {
+      task: z.string().describe("Free-text description of what you're about to do"),
+      files: z.array(z.string()).optional().describe("Paths you already know are involved (relative to repo root)"),
+      topN: z.number().int().min(1).max(50).optional().describe("Max candidate files to brief, by relevance (default 8)"),
+    },
+    async ({ task, files, topN }) => {
+      try {
+        const { graph } = await loadHeadGraph(repoRoot);
+        const ref = await resolveRepoRef(repoRoot);
+        const loaded = loadPolicy(repoRoot);
+        const policy = "error" in loaded ? DEFAULT_POLICY : loaded.policy;
+        const embedModel = new OllamaEmbeddingModel(
+          process.env["KEEL_EMBED_MODEL"],
+          process.env["KEEL_OLLAMA_URL"],
+          WHY_EMBED_TIMEOUT_MS,
+        );
+        const result = await buildContext(
+          {
+            task,
+            ...(files !== undefined ? { files: files.map((f) => normalize(repoRoot, f)) } : {}),
+            ...(topN !== undefined ? { topN } : {}),
+          },
+          {
+            graph,
+            store,
+            embedModel,
+            repoRef: "error" in ref ? null : ref,
+            policy,
+            history: (file) => historyFor(repoRoot, file, 5),
+          },
+        );
+        if ("error" in loaded && !("error" in result)) {
+          result.notes.push(`keel.policy.json ignored for risk flags (${loaded.error}); used defaults.`);
+        }
+        return json(result);
+      } catch (err) {
+        return json({ error: `context failed: ${(err as Error).message}` });
       }
     },
   );
