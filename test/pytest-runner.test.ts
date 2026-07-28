@@ -147,6 +147,23 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
     expect(failure!.graphPath).toEqual(["test_calc.py", "calc.py"]);
   }, 60_000);
 
+  it("carries file, trace, and graphPath on a pytest failure — parity with the JS/Go runners", async () => {
+    const pf = await preflight(dir, { diff: BREAK });
+    if ("error" in pf) throw new Error(pf.error);
+    const failure = pf.executed.failures.find((f) => f.test === "test_add");
+    expect(failure).toBeDefined();
+    // file recovered from the junit (classname/file attributes)
+    expect(failure!.file).toBe("test_calc.py");
+    // graph path attributed exactly as the other runners do
+    expect(failure!.graphPath).toEqual(["test_calc.py", "calc.py"]);
+    // the full traceback carried as trace (the <failure> text), not just the one-line message
+    expect(failure!.message).toContain("assert -1 == 3");
+    expect(failure!.trace).toBeDefined();
+    expect(failure!.trace).toMatch(/test_calc\.py:\d+/); // the assertion location, from the traceback
+    expect(failure!.trace!.split("\n").length).toBeGreaterThan(1); // multi-line, unlike the message
+    expect(failure!.trace).not.toMatch(ANSI);
+  }, 60_000);
+
   it("passes a benign change", async () => {
     const benign = BREAK.replace("+    return a - b", "+    return a + b + 0");
     const pf = await preflight(dir, { diff: benign });

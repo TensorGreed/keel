@@ -236,13 +236,18 @@ function pytestResults(
 
     failed++;
     const file = fileOf(t);
+    // The trace: the <failure>/<error> text (a full traceback), or captured stdout as a fallback,
+    // ANSI-stripped and line-capped — parity with the JS/Go runners, which also carry a trace.
+    const rawTrace = t.details ?? t.systemOut;
+    const trace = rawTrace ? capLines(stripAnsi(rawTrace).trim(), MAX_TRACE_LINES) : undefined;
+    const withTrace = trace ? { trace } : {};
     const isCollectionError = t.status === "error" && (!t.classname || t.message === "collection failure");
     if (isCollectionError) {
       const message = exceptionLine(t.details) ?? t.message ?? "collection error";
-      failures.push({ name: t.name || "(collection error)", ...(file ? { file } : {}), message, kind: "collection-error" });
+      failures.push({ name: t.name || "(collection error)", ...(file ? { file } : {}), message, ...(trace && trace !== message ? withTrace : {}), kind: "collection-error" });
     } else {
       const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
-      failures.push({ name: t.name || "(unnamed test)", ...(file ? { file } : {}), message });
+      failures.push({ name: t.name || "(unnamed test)", ...(file ? { file } : {}), message, ...(trace && trace !== message ? withTrace : {}) });
     }
   }
   return { passed, failed, failures, total: report.tests.length };

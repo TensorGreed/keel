@@ -21,6 +21,8 @@ export interface TestCaseResult {
   message?: string;
   /** the failure/error element's text body (stack/traceback), when present */
   details?: string;
+  /** the `<system-out>` text body (captured stdout), when present — a trace fallback */
+  systemOut?: string;
 }
 
 export interface JUnitReport {
@@ -76,9 +78,10 @@ function childMessage(body: string, tag: "failure" | "error"): string | undefine
   return m ? decode(m[1]!) : undefined;
 }
 
-/** The text body of the first `<failure>`/`<error>` element (the stack/traceback), if any.
- *  pytest puts the ImportError of a collection failure here, not in the message attribute. */
-function childDetails(body: string, tag: "failure" | "error"): string | undefined {
+/** The decoded text body of the first `<tag>…</tag>` element in `body`, if any (not self-closing).
+ *  pytest and Surefire put the stack/traceback in `<failure>`/`<error>`; `<system-out>` holds
+ *  captured stdout. */
+function elementText(body: string, tag: string): string | undefined {
   const start = body.search(new RegExp(`<${tag}\\b`));
   if (start < 0) return undefined;
   const openEnd = tagEnd(body, start);
@@ -93,7 +96,7 @@ function statusOf(body: string): { status: TestStatus; message?: string; details
   for (const tag of ["failure", "error"] as const) {
     if (new RegExp(`<${tag}\\b`).test(body)) {
       const message = childMessage(body, tag);
-      const details = childDetails(body, tag);
+      const details = elementText(body, tag);
       return { status: tag === "failure" ? "failed" : "error", ...(message ? { message } : {}), ...(details ? { details } : {}) };
     }
   }
@@ -127,11 +130,13 @@ export function parseJUnit(xml: string): JUnitReport {
     const attrs = parseAttrs(openTag);
 
     let result: { status: TestStatus; message?: string; details?: string } = { status: "passed" };
+    let systemOut: string | undefined;
     let next = openEnd + 1;
     if (!/\/\s*>$/.test(openTag)) {
       const close = xml.indexOf("</testcase>", openEnd);
       const body = xml.slice(openEnd + 1, close < 0 ? undefined : close);
       result = statusOf(body);
+      if (result.status !== "passed") systemOut = elementText(body, "system-out");
       next = close < 0 ? openEnd + 1 : close + "</testcase>".length;
     }
 
@@ -144,6 +149,7 @@ export function parseJUnit(xml: string): JUnitReport {
       status: result.status,
       ...(result.message ? { message: result.message } : {}),
       ...(result.details ? { details: result.details } : {}),
+      ...(systemOut ? { systemOut } : {}),
     });
     i = next;
   }
