@@ -137,6 +137,39 @@ export class SqliteEventStore implements EventStore {
     return rows.map((row) => this.hydrate(row));
   }
 
+  /**
+   * Store an embedding for an event, replacing any prior one. Keyed by the event's row id
+   * (looked up from kind + external_id), so it's tied to the event and cleaned up with it.
+   * No-op if the event doesn't exist. The vector is stored as raw float32 bytes.
+   */
+  setEmbedding(kind: EventKind, externalId: string, vector: Float32Array): void {
+    const row = this.db
+      .prepare("SELECT id FROM events WHERE kind = ? AND external_id = ?")
+      .get(kind, externalId) as { id: number | bigint } | undefined;
+    if (!row) return;
+    const bytes = Buffer.from(vector.buffer, vector.byteOffset, vector.byteLength);
+    this.db
+      .prepare("INSERT OR REPLACE INTO embeddings (event_id, dim, vector) VALUES (?, ?, ?)")
+      .run(row.id, vector.length, bytes);
+  }
+
+  /** external_id -> embedding vector, for every embedded event of a kind (for retrieval). */
+  embeddingsByKind(kind: EventKind): Map<string, Float32Array> {
+    const rows = this.db
+      .prepare(
+        "SELECT e.external_id AS externalId, m.vector AS vector FROM embeddings m " +
+          "JOIN events e ON e.id = m.event_id WHERE e.kind = ? AND e.external_id IS NOT NULL",
+      )
+      .all(kind) as unknown as { externalId: string; vector: Uint8Array }[];
+    const out = new Map<string, Float32Array>();
+    for (const row of rows) {
+      // Copy to a fresh, aligned buffer before viewing as float32.
+      const buf = row.vector.buffer.slice(row.vector.byteOffset, row.vector.byteOffset + row.vector.byteLength);
+      out.set(row.externalId, new Float32Array(buf));
+    }
+    return out;
+  }
+
   private hydrate(row: EventRow): KeelEvent {
     const files = (
       this.db.prepare("SELECT path FROM event_files WHERE event_id = ? ORDER BY path").all(row.id) as {

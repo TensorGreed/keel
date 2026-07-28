@@ -30,3 +30,12 @@ CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+
+-- Embeddings for semantic retrieval (decision records today). Computed offline by a local
+-- model — the vector is a float32 array stored as a BLOB; dim lets us validate on read.
+-- One row per event; recomputed by replacing the row.
+CREATE TABLE IF NOT EXISTS embeddings (
+  event_id INTEGER PRIMARY KEY REFERENCES events (id),
+  dim      INTEGER NOT NULL,
+  vector   BLOB NOT NULL
+);

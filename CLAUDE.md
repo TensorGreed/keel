@@ -46,7 +46,7 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          CLI entry: dispatches `keel serve` (default), `init`, `ingest`
+  index.ts          CLI entry: dispatches `keel serve` (default), `init`, `ingest`, `mine`
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
@@ -62,6 +62,8 @@ src/
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
                     The one place model calls are allowed — Ollama or batch Haiku,
                     injectable DecisionModel; never reached from the MCP server
+  retrieval/        Decision index: embed.ts (offline local embeddings, injectable),
+                    index.ts (retrieve decisions by graph node or by meaning — no model calls)
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 test/               Vitest; fixtures under test/fixtures/
