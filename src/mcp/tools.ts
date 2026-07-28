@@ -17,6 +17,7 @@ import { OllamaEmbeddingModel } from "../retrieval/embed.js";
 import { resolveRepoRef } from "../github/remote.js";
 import { computeVerdict } from "../trust/verdict.js";
 import { buildContext } from "../context/briefing.js";
+import { computeHotspots, coveredFiles } from "../trust/hotspots.js";
 import { loadPolicy, DEFAULT_POLICY } from "../trust/policy.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
@@ -156,6 +157,10 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
 /** Query-time embedding timeout: keep the server responsive if Ollama is slow/absent. */
 const WHY_EMBED_TIMEOUT_MS = 2000;
 
+/** Hotspot window + top-N used to flag a context candidate as a repo risk hotspot. */
+const HOTSPOT_WINDOW_DAYS = 90;
+const HOTSPOT_TOP_N = 20;
+
 /** Registered only when an event store is available (needs mined/human decisions to read). */
 function registerWhy(server: McpServer, repoRoot: string, store: SqliteEventStore): void {
   server.tool(
@@ -207,10 +212,10 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
       "already know are involved), resolve the candidate files and, for each, return its blast " +
       "radius + key dependents, recent history, linked decisions (with PR receipts), and covering " +
       "tests. Rolls up suggestedTests, relevantDecisions (human-recorded first), and risks " +
-      "(uncovered / high-blast-radius / protected-path). Pure composition of the graph, git, the " +
-      "decision index, and keel.policy.json — no generative calls; ranking uses the same LOCAL " +
-      "embedding as `why` and falls back to keyword. Capped to the top N candidates (default 8); " +
-      "everything truncated is stated in notes.",
+      "(uncovered / high-blast-radius / protected-path / top-hotspot). Pure composition of the " +
+      "graph, git, the event log, the decision index, and keel.policy.json — no generative calls; " +
+      "ranking uses the same LOCAL embedding as `why` and falls back to keyword. Capped to the " +
+      "top N candidates (default 8); everything truncated is stated in notes.",
     {
       task: z.string().describe("Free-text description of what you're about to do"),
       files: z.array(z.string()).optional().describe("Paths you already know are involved (relative to repo root)"),
@@ -227,6 +232,12 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
           process.env["KEEL_OLLAMA_URL"],
           WHY_EMBED_TIMEOUT_MS,
         );
+        // Repo risk hotspots (churn × blast radius × coverage gap) so a candidate that's one
+        // gets flagged. Commit churn comes from the event log the server already ingested.
+        const since = new Date(Date.now() - HOTSPOT_WINDOW_DAYS * 86_400_000).toISOString();
+        const hotspots = new Set(
+          computeHotspots(graph, store.churnByFile(since), coveredFiles(graph), { limit: HOTSPOT_TOP_N }).map((h) => h.path),
+        );
         const result = await buildContext(
           {
             task,
@@ -240,6 +251,7 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
             repoRef: "error" in ref ? null : ref,
             policy,
             history: (file) => historyFor(repoRoot, file, 5),
+            hotspots,
           },
         );
         if ("error" in loaded && !("error" in result)) {

@@ -176,6 +176,21 @@ export class SqliteEventStore implements EventStore {
     return row.n;
   }
 
+  /**
+   * Per-file churn: how many distinct commits touched each file at or after `sinceIso`.
+   * One grouped query over the commit events — the raw material for the hotspot report.
+   */
+  churnByFile(sinceIso: string): Map<string, number> {
+    const rows = this.db
+      .prepare(
+        "SELECT f.path AS path, COUNT(DISTINCT e.id) AS n FROM events e " +
+          "JOIN event_files f ON f.event_id = e.id " +
+          "WHERE e.kind = 'commit' AND e.occurred_at >= ? GROUP BY f.path",
+      )
+      .all(sinceIso) as unknown as { path: string; n: number }[];
+    return new Map(rows.map((r) => [r.path, r.n]));
+  }
+
   /** Record that a PR has been mined at a given updated_at (any outcome, incl. no decision). */
   markPrMined(externalId: string, updatedAt: string): void {
     this.db

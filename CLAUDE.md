@@ -78,9 +78,11 @@ src/
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
                     machine-checkable facts), policy.ts (keel.policy.json, pure eval +
                     glob), arch.ts (forbiddenImports: forbidden from→to graph edges),
+                    hotspots.ts (rank files by churn × blast radius × coverage gap),
                     verdict.ts (pass/warn/block with audited reasons), verdict-cli.ts
-                    (`keel verdict` for CI + hooks), report-cli.ts (`keel report --arch`,
-                    repo-wide import-rule violations for adoption). No model calls.
+                    (`keel verdict` for CI + hooks), report-cli.ts (`keel report`
+                    --arch / --hotspots, repo-wide reports for adoption + triage).
+                    No model calls.
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook;
@@ -154,3 +156,11 @@ tree graph, scoped to changed files). `keel report --arch` lists every repo-wide
 (informational, exit 0) so a team can adopt a rule on a legacy repo before it gates anyone —
 changed-file edges gate, pre-existing edges inform. Keel dogfoods one rule itself: the MCP
 server may not import the offline mining layer (principle 1). Pure graph analysis, no model calls.
+
+Phase 4 item 3, risk hotspots, is done. `keel report --hotspots` ranks files by
+risk = churn × (blast radius + 1) × coverage gap — churn from the event log (commits touching
+the file in a trailing window, default 90d/`--days`), blast radius from the cached graph,
+coverage from the select_tests machinery (`src/trust/hotspots.ts`, `churnByFile` on the store).
+Every line shows the components, not just the score; capped by `--limit` (default 20). `keel
+report` with no flag prints arch + hotspots. The `context` tool flags a candidate that ranks as
+a top hotspot. No model calls.

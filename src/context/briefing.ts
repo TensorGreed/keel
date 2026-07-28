@@ -38,6 +38,8 @@ export interface ContextDeps {
   policy: Policy;
   /** recent commits for a file — injected so the composition is testable without git */
   history: (file: string) => Promise<CommitInfo[]>;
+  /** paths that rank as repo risk hotspots (churn × blast radius × coverage gap) */
+  hotspots: Set<string>;
 }
 
 export interface CandidateBrief {
@@ -52,7 +54,7 @@ export interface CandidateBrief {
   tests: { covering: string[]; uncovered: boolean };
 }
 
-export type RiskType = "uncovered" | "high-blast-radius" | "protected-path";
+export type RiskType = "uncovered" | "high-blast-radius" | "protected-path" | "top-hotspot";
 export interface Risk {
   type: RiskType;
   file: string;
@@ -256,6 +258,9 @@ export async function buildContext(
     }
     for (const p of deps.policy.protectedPaths) {
       if (globMatch(p.glob, c.file)) risks.push({ type: "protected-path", file: c.file, detail: `matches protected "${p.glob}" (${p.reason})` });
+    }
+    if (deps.hotspots.has(c.file)) {
+      risks.push({ type: "top-hotspot", file: c.file, detail: "ranks among the repo's risk hotspots (recent churn × blast radius × coverage gap)" });
     }
     if (linked.length > MAX_DECISIONS_PER_FILE) {
       notes.push(`${c.file}: ${linked.length} linked decisions; showing the ${MAX_DECISIONS_PER_FILE} nearest.`);

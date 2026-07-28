@@ -71,6 +71,7 @@ function fixture(): { graph: FileGraph; deps: (over?: Partial<ContextDeps>) => C
     repoRef: { owner: "o", repo: "r" },
     policy,
     history: async (f) => (f === "src/auth.ts" ? [commit] : []),
+    hotspots: new Set<string>(),
     ...over,
   });
   return { graph, deps, store };
@@ -115,6 +116,13 @@ describe("buildContext", () => {
     expect(byType("protected-path")).toContain("src/auth.ts");
     expect(byType("uncovered")).toContain("src/util.ts");
     expect(byType("high-blast-radius")).toContain("src/big.ts"); // 31 dependents ≥ 25
+  });
+
+  it("flags a candidate that is a repo risk hotspot", async () => {
+    const { deps } = fixture();
+    const b = ok(await buildContext({ task: "x", files: ["src/util.ts"] }, deps({ hotspots: new Set(["src/util.ts"]) })));
+    const hot = b.risks.filter((r) => r.type === "top-hotspot").map((r) => r.file);
+    expect(hot).toContain("src/util.ts");
   });
 
   it("links decisions with receipts and rolls them up human-first", async () => {
