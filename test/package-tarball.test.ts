@@ -34,6 +34,7 @@ describe("npm package tarball", () => {
       "LICENSE",
       "dist/index.js",
       "dist/events/schema.sql", // copied next to the compiled store; the DB won't open without it
+      "dist/graph/wasm/tree-sitter-python.wasm", // the Python grammar — ships so installs stay zero-build
       "recipes/claude-code-hook.md",
       "docs/concept.md",
     ]) {

@@ -28,6 +28,7 @@ import {
   updateFileGraph,
   type FileGraph,
 } from "./dependencies.js";
+import { initGraphScanners } from "./scanners.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,6 +99,10 @@ export async function gitShowHead(repoRoot: string, relPosixPath: string): Promi
 }
 
 async function computeGraph(root: string, head: string | null, dirty: Set<string> | null): Promise<GraphLoad> {
+  // Any scan may hit a language needing async setup (the Python WASM runtime); do it once here,
+  // before build/update, so the scanners stay synchronous.
+  await initGraphScanners();
+
   // Without git we can't detect change precisely, so always rebuild (correct, just not cached).
   if (head === null || dirty === null) {
     return { graph: buildFileGraph(root), source: "rebuild", head };

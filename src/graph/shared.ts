@@ -5,9 +5,13 @@
  */
 import * as path from "node:path";
 
-/** Directories never walked or resolved into — build output, VCS, and vendored deps. Language
- *  scanners may add their own (e.g. Python's venv dirs) but this is the shared baseline. */
-export const IGNORED_DIRS = new Set(["node_modules", ".git", "dist", "build", "coverage", ".next", "out"]);
+/** Directories never walked or resolved into — build output, VCS, vendored deps, and language
+ *  virtual-environments (Python's venv/site-packages/caches). `.venv`/`.tox` are also covered by
+ *  the dotfile rule in listSourceFiles/isGraphSourcePath; listed here so both paths agree. */
+export const IGNORED_DIRS = new Set([
+  "node_modules", ".git", "dist", "build", "coverage", ".next", "out",
+  "venv", ".venv", "__pycache__", ".tox", "site-packages",
+]);
 
 /** An absolute path as a repo-relative posix path — the form every graph key uses. */
 export function toRepoRelative(root: string, absolute: string): string {

@@ -60,8 +60,9 @@ src/
                     get_history)
   graph/            System graph, language-agnostic composer + a per-language scanner seam:
                     scanner.ts (LanguageScanner interface), typescript-scanner.ts (TS compiler
-                    API), scanners.ts (registry by extension), dependencies.ts (walk + resolve
-                    + assemble), cache.ts (incremental, git-HEAD-keyed graph cache)
+                    API), python-scanner.ts (web-tree-sitter WASM, grammar in graph/wasm/),
+                    scanners.ts (registry by extension + async init), dependencies.ts (walk +
+                    resolve + assemble), cache.ts (incremental, git-HEAD-keyed graph cache)
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests),
