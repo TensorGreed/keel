@@ -176,6 +176,22 @@ export class SqliteEventStore implements EventStore {
     return row.n;
   }
 
+  /** Record that a PR has been mined at a given updated_at (any outcome, incl. no decision). */
+  markPrMined(externalId: string, updatedAt: string): void {
+    this.db
+      .prepare("INSERT OR REPLACE INTO mined_prs (external_id, updated_at) VALUES (?, ?)")
+      .run(externalId, updatedAt);
+  }
+
+  /** PR external_id -> the updated_at it was last mined at (for incremental skip decisions). */
+  minedPrs(): Map<string, string> {
+    const rows = this.db.prepare("SELECT external_id AS externalId, updated_at AS updatedAt FROM mined_prs").all() as unknown as {
+      externalId: string;
+      updatedAt: string;
+    }[];
+    return new Map(rows.map((r) => [r.externalId, r.updatedAt]));
+  }
+
   /** Mark a decision suppressed (a human "reject"); kept in the log, excluded from results. */
   suppressDecision(externalId: string): void {
     this.db.prepare("INSERT OR IGNORE INTO suppressed_decisions (external_id) VALUES (?)").run(externalId);

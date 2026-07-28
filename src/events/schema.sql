@@ -46,3 +46,11 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE TABLE IF NOT EXISTS suppressed_decisions (
   external_id TEXT PRIMARY KEY
 );
+
+-- Which PRs the miner has processed, and at what updated_at — so re-running mines only new
+-- or changed PRs and never re-charges the model for a PR that yielded no decision. Keyed by
+-- the PR's external_id; a bumped updated_at (new comment/review) re-opens it for mining.
+CREATE TABLE IF NOT EXISTS mined_prs (
+  external_id TEXT PRIMARY KEY,
+  updated_at  TEXT NOT NULL
+);

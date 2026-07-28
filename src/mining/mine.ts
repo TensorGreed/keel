@@ -16,25 +16,33 @@ import { MinerModelError } from "./model.js";
 import { buildDecisionPrompt, type PrThread, type ThreadComment, type ThreadReview } from "./prompt.js";
 
 export interface MineOptions {
-  /** cap PRs mined this run (newest first); default 200 */
+  /** cap PRs mined this run (newest-updated first); default 200 */
   limit?: number;
 }
 
 export interface MineResult {
   model: string;
-  /** PRs examined */
+  /** PRs in the log */
   total: number;
   /** decision events newly stored */
   mined: number;
-  /** PRs skipped because they were already mined */
+  /** PRs skipped because they were already mined/decided and unchanged (no model call) */
   skipped: number;
+  /** PRs left for the next run because the per-run cap was hit */
+  deferred: number;
   /** PRs the model judged to carry no decision */
   noDecision: number;
-  /** PRs that failed (model error or unparseable output) */
+  /** PRs that failed (model error or unparseable output) — retried next run */
   errors: number;
 }
 
 const DEFAULT_LIMIT = 200;
+
+/** The PR's updated_at (bumps on new comments/reviews), falling back to its created_at. */
+function prUpdatedAt(pr: KeelEvent): string {
+  const updated = pr.payload["updatedAt"];
+  return typeof updated === "string" && updated !== "" ? updated : pr.occurredAt;
+}
 
 function log(message: string): void {
   process.stderr.write(`[keel] ${message}\n`);
@@ -113,7 +121,7 @@ export async function mineDecisions(
   options: MineOptions = {},
 ): Promise<MineResult> {
   const limit = options.limit ?? DEFAULT_LIMIT;
-  const prs = await store.byKind("pr", limit);
+  const prs = await store.byKind("pr", 100_000);
   const comments = await store.byKind("review_comment", 100_000);
 
   const commentsByPr = new Map<number, KeelEvent[]>();
@@ -126,23 +134,30 @@ export async function mineDecisions(
     }
   }
 
-  const alreadyMined = new Set(
+  // Two skip signals, both avoiding a model call: a decision already exists for the PR
+  // (decisions are immutable — never re-mine), or the PR was mined at its current updated_at.
+  const decided = new Set(
     (await store.byKind("decision", 100_000))
       .map((d) => d.payload["sourcePr"])
       .filter((id): id is string => typeof id === "string"),
   );
+  const mined = store.minedPrs();
+
+  const pending = prs.filter((pr) => {
+    if (pr.externalId === undefined || decided.has(pr.externalId)) return false;
+    const seenAt = mined.get(pr.externalId);
+    return seenAt === undefined || seenAt < prUpdatedAt(pr); // unmined, or changed since mined
+  });
+  // Newest-updated first, so the per-run cap keeps the freshest decisions.
+  pending.sort((a, b) => prUpdatedAt(b).localeCompare(prUpdatedAt(a)));
+  const toMine = pending.slice(0, Math.max(0, limit));
 
   const events: KeelEvent[] = [];
-  let mined = 0;
-  let skipped = 0;
+  let minedCount = 0;
   let noDecision = 0;
   let errors = 0;
 
-  for (const pr of prs) {
-    if (pr.externalId && alreadyMined.has(pr.externalId)) {
-      skipped++;
-      continue;
-    }
+  for (const pr of toMine) {
     const thread = assembleThread(pr, commentsByPr.get(pr.payload["number"] as number) ?? []);
 
     let output: string;
@@ -152,25 +167,36 @@ export async function mineDecisions(
       errors++;
       if (err instanceof MinerModelError) log(`PR #${thread.number}: model error: ${err.message}`);
       else throw err;
-      continue;
+      continue; // not marked mined — retried next run
     }
 
     const parsed = parseDecision(output);
     if ("error" in parsed) {
       errors++;
       log(`PR #${thread.number}: could not parse model output (${parsed.error})`);
-      continue;
+      continue; // not marked mined — retried next run
     }
+
+    // Mined successfully (decision or not): mark it so an unchanged PR isn't re-mined.
+    store.markPrMined(pr.externalId!, prUpdatedAt(pr));
     if (!parsed.hasDecision) {
       noDecision++;
       continue;
     }
     events.push(decisionEvent(pr, thread, parsed));
-    mined++;
+    minedCount++;
   }
 
   const inserted = store.appendMany(events);
-  return { model: model.name, total: prs.length, mined: inserted, skipped, noDecision, errors };
+  return {
+    model: model.name,
+    total: prs.length,
+    mined: inserted,
+    skipped: prs.length - pending.length,
+    deferred: pending.length - toMine.length,
+    noDecision,
+    errors,
+  };
 }
 
 // Re-exported so the CLI and tests share one EventStore type import surface.

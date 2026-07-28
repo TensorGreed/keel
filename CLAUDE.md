@@ -102,11 +102,12 @@ returning executed pass/fail with per-failure traces and the import path from ea
 test back to the change. Explicit diffs are validated the same way analysis and execution
 apply them, so the two never disagree.
 
-Phase 2 (team memory) is nearly complete. `keel ingest` backfills GitHub PRs + review
-threads into the event log; `keel mine` extracts decision records from them with a local
-(Ollama) or batch-Haiku model and embeds them locally for retrieval (the only place model
-calls happen — offline, plus a local query embedding in the server); the `why` MCP tool
-answers "why is this like this?" for a file or question, linking decisions through the graph
-with PR source receipts, and `keel decision add`/`reject` gives humans an override that
-outranks or suppresses mined records. Remaining: incremental mining on new PRs (the last
-Phase 2 item), then Phase 3 (trust layer) — see `docs/roadmap.md`.
+Phase 2 (team memory) is complete. `keel ingest` backfills GitHub PRs + review threads into
+the event log; `keel mine` extracts decision records from them with a local (Ollama) or
+batch-Haiku model and embeds them locally for retrieval — incrementally: it tracks which PRs
+it has mined (any outcome) so a re-run only touches new or changed PRs and never re-charges
+the model for a no-decision PR. Model calls happen only here (offline) plus a local query
+embedding in the server. The `why` MCP tool answers "why is this like this?" for a file or
+question, linking decisions through the graph with PR source receipts; `keel decision
+add`/`reject` gives humans an override that outranks or suppresses mined records. Next is
+Phase 3 (trust layer) — see `docs/roadmap.md` and pick up the first unchecked item.

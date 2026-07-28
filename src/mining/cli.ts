@@ -94,6 +94,9 @@ export async function runMine(argv: string[]): Promise<number> {
       `[keel] mined ${result.mined} decision(s) from ${result.total} PR(s) ` +
         `(${result.skipped} already mined, ${result.noDecision} no decision, ${result.errors} error(s)) via ${result.model}`,
     );
+    if (result.deferred > 0) {
+      warn(`${result.deferred} PR(s) deferred by the per-run cap; re-run 'keel mine' to continue`);
+    }
 
     // Embed the decisions for semantic retrieval (best-effort, local model). Missing this
     // only disables semantic search — retrieval-by-file still works. Idempotent, so a later
