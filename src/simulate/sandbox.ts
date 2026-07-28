@@ -39,6 +39,8 @@ export type RunStatus =
   | "timed-out"
   | "runner-unsupported"
   | "runner-unavailable"
+  /** the runner exists but its environment couldn't be prepared (e.g. a Go toolchain download failed) */
+  | "environment-error"
   | "error";
 
 export interface TestFailure {
@@ -374,10 +376,53 @@ function runnerCommand(runner: "vitest" | "jest" | "node", worktree: string, tes
   }
 }
 
+/** A conftest pytest reported as fatal to load, and the exception line to show for it. */
+interface ConftestError {
+  /** the conftest's directory subtree (repo-relative posix) — every test under it is unrunnable */
+  dir: string;
+  message: string;
+}
+
+/**
+ * Conftests pytest failed to LOAD, parsed from a run's output. An ImportError while loading a
+ * conftest.py is fatal to the whole pytest session regardless of --continue-on-collection-errors
+ * (that flag only covers collection of test *modules*), so no junitxml is produced and the failure
+ * is only visible in the output. pytest aborts on the first such conftest, so a run usually yields
+ * one; each governs a directory subtree we can exclude and retry without.
+ */
+function parseConftestLoadErrors(cleanOutput: string, worktree: string): ConftestError[] {
+  const re = /while loading conftest ['"]([^'"]+)['"]/g;
+  const errors: ConftestError[] = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(cleanOutput)) !== null) {
+    const dir = path.posix.dirname(toRepoRel(worktree, m[1]!)); // the conftest's directory subtree
+    if (seen.has(dir)) continue;
+    seen.add(dir);
+    // The exception ("E   ModuleNotFoundError: ...") lives between this header and the next.
+    const next = cleanOutput.indexOf("while loading conftest", re.lastIndex);
+    const block = cleanOutput.slice(m.index, next === -1 ? undefined : next);
+    errors.push({ dir, message: exceptionLine(block) ?? "conftest import failed" });
+  }
+  return errors;
+}
+
+/** Whether a selected test file lives under a conftest's directory subtree. */
+function underSubtree(testFile: string, dir: string): boolean {
+  return dir === "." || testFile === dir || testFile.startsWith(dir + "/");
+}
+
 /**
  * Run the selected Python tests under pytest in the worktree, returning normalized results.
  * pytest missing from the chosen interpreter is a clean "runner-unavailable" status naming it,
  * never a crash. Returns the result sans durationMs (the caller stamps it).
+ *
+ * A conftest.py that fails to import aborts the entire session (see parseConftestLoadErrors), so
+ * one broken example sub-project would otherwise sink the whole run with an empty result. We defend
+ * with a bounded exclude-and-retry loop: detect the offending conftest, record a collection-error
+ * for every selected test under its subtree, and re-run with the rest. At most 3 retries, each of
+ * which provably removes ≥1 subtree (pytest only loads a conftest that governs a selected test);
+ * the wall-time budget is cumulative across retries.
  */
 async function runPytest(
   repoRoot: string,
@@ -406,60 +451,111 @@ async function runPytest(
   // Put the worktree's module roots on PYTHONPATH so the change under test is imported (and takes
   // precedence over any installed copy) — the pytest analog of the node_modules symlink.
   const pythonPath = [...pythonModuleRoots(worktree), process.env["PYTHONPATH"]].filter(Boolean).join(path.delimiter);
-  const junitFile = path.join(parent, "report.xml");
-  const proc = await runProcess(
-    interpreter.cmd,
-    [
-      "-m", "pytest", ...ranTests,
-      `--junitxml=${junitFile}`,
-      "-p", "no:cacheprovider", // core pytest, no plugins
-      "--continue-on-collection-errors", // one broken sub-project can't abort the whole run
-      "--color=no", // keep the output tail parseable (no ANSI)
-    ],
-    { cwd: worktree, timeoutMs, env: { PYTHONPATH: pythonPath } },
-  );
+  const MAX_RETRIES = 3;
 
-  // Strip ANSI defensively before truncating, so the tail is clean even if a subprocess colorizes.
-  const combined = tail(stripAnsi(`${proc.stdout}\n${proc.stderr}`));
-  if (proc.timedOut) {
-    return { status: "timed-out", runner: "pytest", ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...cappedField };
-  }
-  if (proc.spawnError) {
-    return { status: "error", runner: "pytest", ranTests, error: proc.spawnError, ...(combined ? { output: combined } : {}), ...cappedField };
+  let remaining = [...ranTests];
+  const excluded: TestFailure[] = []; // tests under a broken conftest — recorded, not executed
+  const outputs: string[] = [];
+  let executed: ReturnType<typeof pytestResults> | null = null;
+  let lastCode: number | null = null;
+  let budgetMs = timeoutMs;
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (remaining.length === 0 || budgetMs <= 0) break;
+
+    const junitFile = path.join(parent, `report.${attempt}.xml`);
+    const start = Date.now();
+    const proc = await runProcess(
+      interpreter.cmd,
+      [
+        "-m", "pytest", ...remaining,
+        `--junitxml=${junitFile}`,
+        "-p", "no:cacheprovider", // core pytest, no plugins
+        "--continue-on-collection-errors", // recoverable collection errors don't abort the run
+        "--color=no", // keep the output tail parseable (no ANSI)
+      ],
+      { cwd: worktree, timeoutMs: budgetMs, env: { PYTHONPATH: pythonPath } },
+    );
+    budgetMs -= Date.now() - start;
+    lastCode = proc.code;
+    const clean = stripAnsi(`${proc.stdout}\n${proc.stderr}`);
+    outputs.push(clean);
+
+    if (proc.timedOut) {
+      // We only keep `executed` results at a terminal break, so none exist yet here; still report
+      // any conftests already excluded so the timeout doesn't erase that honesty.
+      return { status: "timed-out", runner: "pytest", ranTests, timedOut: true, exitCode: proc.code, passed: 0, failed: excluded.length, failures: [...excluded], ...withOutput(outputs), ...cappedField };
+    }
+    if (proc.spawnError) {
+      return { status: "error", runner: "pytest", ranTests, error: proc.spawnError, ...withOutput(outputs), ...cappedField };
+    }
+
+    let results: ReturnType<typeof pytestResults> | null = null;
+    try {
+      results = pytestResults(fs.readFileSync(junitFile, "utf8"), worktree, remaining);
+    } catch {
+      results = null;
+    }
+    if (results && results.total > 0) {
+      executed = results; // the session completed (no fatal conftest) — terminal
+      break;
+    }
+
+    // No parseable results: a fatal conftest abort, no tests collected, or an opaque failure.
+    const conftests = parseConftestLoadErrors(clean, worktree);
+    if (conftests.length === 0) {
+      executed = results; // not a conftest abort — terminal (no-tests / opaque failure)
+      break;
+    }
+
+    // Record every selected test under a broken conftest as a collection error, and drop it. Each
+    // detected conftest governs ≥1 selected test (pytest wouldn't have loaded it otherwise), so this
+    // removes ≥1 — provable progress. On the last allowed attempt we still record, then stop.
+    let removedAny = false;
+    for (const { dir, message } of conftests) {
+      const under = remaining.filter((t) => underSubtree(t, dir));
+      if (under.length === 0) continue;
+      removedAny = true;
+      for (const t of under) excluded.push({ name: path.posix.basename(t), file: t, message, kind: "collection-error" });
+      remaining = remaining.filter((t) => !underSubtree(t, dir));
+    }
+    if (!removedAny) break; // no subtree matched — can't make progress, stop rather than spin
   }
 
-  let results: ReturnType<typeof pytestResults> | null = null;
-  try {
-    results = pytestResults(fs.readFileSync(junitFile, "utf8"), worktree, ranTests);
-  } catch {
-    results = null;
-  }
+  const realFailures = executed?.failures ?? [];
+  const passed = executed?.passed ?? 0;
+  const failures = [...realFailures, ...excluded];
+  const executedTotal = executed?.total ?? 0;
 
-  // pytest exit codes: 0 ok, 1 tests failed, 2 collection error, 5 no tests collected.
+  // Status reflects the executed tests' outcome; a collection error is a failure (as pytest's own
+  // collection errors already are). By construction, "failed" implies a non-empty failures list —
+  // and the residual opaque case (no results, no conftest, non-zero exit) still carries an error.
   const status: RunStatus =
-    results && results.total > 0
-      ? results.failed > 0 ? "failed" : "passed"
-      : proc.code === 5
-        ? "no-tests"
-        : proc.code === 0
-          ? "passed"
-          : "failed";
-
-  // Never a silent "failed" with no detail: if the run failed but produced no parseable results
-  // (e.g. a fatal conftest ImportError that pytest can't recover from), say the run itself failed
-  // — the cleaned output tail carries the reason.
-  const runFailedNoResults = status === "failed" && (!results || results.total === 0);
+    failures.length > 0 ? "failed"
+    : executedTotal > 0 ? "passed"
+    : lastCode === 5 ? "no-tests"
+    : lastCode === 0 ? "passed"
+    : "failed";
+  const failedNoResults = status === "failed" && failures.length === 0;
 
   return {
     status,
     runner: "pytest",
     ranTests,
-    exitCode: proc.code,
-    ...(runFailedNoResults ? { error: `the pytest run failed (exit ${proc.code ?? "?"}) without producing a report — see output` } : {}),
-    ...(results ? { passed: results.passed, failed: results.failed, failures: results.failures } : {}),
-    ...(combined ? { output: combined } : {}),
+    exitCode: lastCode,
+    ...(failedNoResults ? { error: `the pytest run failed (exit ${lastCode ?? "?"}) without producing a report — see output` } : {}),
+    passed,
+    failed: failures.length,
+    failures,
+    ...withOutput(outputs),
     ...cappedField,
   };
+}
+
+/** The cleaned, capped tail of one or more run outputs, as a spreadable `{ output }` (or `{}`). */
+function withOutput(outputs: string[]): { output?: string } {
+  const combined = tail(outputs.join("\n"));
+  return combined ? { output: combined } : {};
 }
 
 interface GoEvent {
@@ -468,6 +564,10 @@ interface GoEvent {
   Test?: string;
   Output?: string;
 }
+
+/** Signatures of a Go toolchain resolution/download failure (GOTOOLCHAIN), distinct from a build
+ *  or test failure — the run never got far enough to compile the change. */
+const GO_TOOLCHAIN_ERROR_RE = /GOTOOLCHAIN|go\.mod requires go|requires go >=|cannot load toolchain|downloading go\d|toolchain\/download|go: download|switching to go/i;
 
 /** The concrete failure line from a Go test's captured output — the `file.go:line: message`
  *  assertion or panic — skipping go test's `=== RUN` / `--- FAIL` framing. */
@@ -583,6 +683,24 @@ async function runGoTest(
 
   const failed = failures.length;
   const total = passed + failed;
+
+  // `go version` reports the local toolchain, but `go test` reads go.mod's `go` directive and may
+  // try to fetch a newer toolchain (GOTOOLCHAIN=auto). When that resolution/download fails, the run
+  // produced no test or build result — that's an environment fault, not the change's or a missing
+  // runner. Report it as such, carrying go's own message, rather than a misleading "failed".
+  if (total === 0 && proc.code !== 0 && GO_TOOLCHAIN_ERROR_RE.test(`${proc.stdout}\n${proc.stderr}`)) {
+    const stderr = stripAnsi(proc.stderr).trim();
+    return {
+      status: "environment-error",
+      runner: "go",
+      ranTests,
+      error: `the go toolchain could not be prepared${stderr ? `: ${stderr.split("\n", 1)[0]}` : ""} — check GOTOOLCHAIN / network`,
+      exitCode: proc.code,
+      ...(combined ? { output: combined } : {}),
+      ...cappedField,
+    };
+  }
+
   const status: RunStatus = total > 0 ? (failed > 0 ? "failed" : "passed") : proc.code === 0 ? "no-tests" : "failed";
   const runFailedNoResults = status === "failed" && total === 0;
 

@@ -77,6 +77,27 @@ function makeSubprojectRepo(kind: "testfile" | "conftest"): string {
   git(d, ["commit", "-qm", "init"]);
   return d;
 }
+/**
+ * A main package plus N example sub-projects, each with its own conftest.py that imports an
+ * uninstalled package (fatal to load). Every test imports pkg.helpers, so a change to it selects
+ * all of them — reproducing the pallets/flask shape where selected tests span several broken
+ * example trees. pytest aborts on the first bad conftest, so clearing them takes one retry each.
+ */
+function makeMultiConftestRepo(examples: number): string {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "keel-pyconf-"));
+  git(d, ["init", "-b", "main"]);
+  write(d, ".gitignore", ".venv/\n.keel/\n");
+  write(d, "pkg/__init__.py", "");
+  write(d, "pkg/helpers.py", 'def greet():\n    return "hi"\n');
+  write(d, "tests/test_helpers.py", "from pkg.helpers import greet\n\n\ndef test_greet():\n    assert greet() == \"hi\"\n");
+  for (let i = 0; i < examples; i++) {
+    write(d, `examples/ex${i}/conftest.py`, `import totally_missing_pkg_${i}_xyz  # not in the venv\n`);
+    write(d, `examples/ex${i}/test_ex${i}.py`, `from pkg.helpers import greet\n\n\ndef test_ex${i}():\n    assert greet()\n`);
+  }
+  git(d, ["add", "-A"]);
+  git(d, ["commit", "-qm", "init"]);
+  return d;
+}
 // Break the main package so its test fails — and pulls in the examples sub-project (it imports pkg too).
 const SUB_BREAK = `diff --git a/pkg/helpers.py b/pkg/helpers.py
 --- a/pkg/helpers.py
@@ -173,6 +194,57 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
       const evidence = `${pf.executed.output ?? ""}\n${pf.executed.failures.map((f) => f.message).join("\n")}`;
       expect(evidence).toContain("totally_not_installed_xyz");
       expect(pf.executed.output ?? "").not.toMatch(ANSI); // ANSI stripped from the tail
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("excludes multiple broken-conftest subtrees across retries and still surfaces the real failure", async () => {
+    // Two example sub-projects each abort pytest on load. The bounded exclude-and-retry loop must
+    // clear both (one retry each) and still run the main package, whose real failure surfaces.
+    const repo = makeMultiConftestRepo(2);
+    try {
+      const started = Date.now();
+      const pf = await preflight(repo, { diff: SUB_BREAK, maxSeconds: 60 });
+      const wallMs = Date.now() - started;
+      if ("error" in pf) throw new Error(pf.error);
+
+      expect(pf.executed.status).toBe("failed");
+      expect(pf.executed.runner).toBe("pytest");
+
+      // Both broken example trees are excluded — each its own collection-error, not a mask.
+      for (const i of [0, 1]) {
+        const coll = pf.executed.failures.find((f) => f.file === `examples/ex${i}/test_ex${i}.py`);
+        expect(coll?.kind).toBe("collection-error");
+        expect(coll!.message).toContain(`totally_missing_pkg_${i}_xyz`);
+        expect(coll!.message).not.toMatch(ANSI);
+      }
+
+      // The main package's real failure still surfaces, with a graph path to the change.
+      const real = pf.executed.failures.find((f) => f.file === "tests/test_helpers.py");
+      expect(real).toBeDefined();
+      expect(real!.kind).toBeUndefined();
+      expect(real!.graphPath).toEqual(["tests/test_helpers.py", "pkg/helpers.py"]);
+
+      // 1 real + 2 collection errors; wall time stays within the cumulative budget.
+      expect(pf.executed.failed).toBe(3);
+      expect(pf.executed.durationMs).toBeLessThan(60_000);
+      expect(wallMs).toBeLessThan(60_000);
+    } finally {
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  it("never reports failed with an empty failures list (the empty-failures rule)", async () => {
+    // The exact regression: a broken conftest used to abort the run into status "failed",
+    // failures: []. Now the abort is converted into recorded collection errors — so whenever the
+    // status is failed, there is always at least one failure to point at.
+    const repo = makeMultiConftestRepo(1);
+    try {
+      const pf = await preflight(repo, { diff: SUB_BREAK });
+      if ("error" in pf) throw new Error(pf.error);
+      expect(pf.executed.status).toBe("failed");
+      expect(pf.executed.failures.length).toBeGreaterThan(0);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

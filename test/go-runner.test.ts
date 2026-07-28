@@ -156,4 +156,28 @@ describe.skipIf(!GO)("go runner — executed path (host go)", () => {
     const evidence = `${pf.executed.output ?? ""}\n${pf.executed.failures.map((f) => `${f.message}\n${f.trace ?? ""}`).join("\n")}`;
     expect(evidence).toContain("bogus"); // the undefined identifier from the compiler
   }, 60_000);
+
+  it("reports environment-error (not runner-unavailable) when the toolchain can't be resolved", async () => {
+    // go exists, but go.mod demands a version this toolchain can't become under GOTOOLCHAIN=local —
+    // that's an environment fault (a real repo would try to download and might fail offline), not a
+    // missing runner or a test failure. Rewrite go.mod to require an impossible version.
+    fs.writeFileSync(path.join(dir, "go.mod"), "module example.com/app\n\ngo 1.99\n");
+    execFileSync("git", ["commit", "-qam", "bump"], {
+      cwd: dir,
+      env: { ...process.env, GIT_AUTHOR_NAME: "D", GIT_AUTHOR_EMAIL: "d@e.com", GIT_COMMITTER_NAME: "D", GIT_COMMITTER_EMAIL: "d@e.com" },
+    });
+    const prev = process.env["GOTOOLCHAIN"];
+    process.env["GOTOOLCHAIN"] = "local"; // never attempt a download — fail fast and deterministically
+    try {
+      const pf = await preflight(dir, { diff: BENIGN });
+      if ("error" in pf) throw new Error(pf.error);
+      expect(pf.executed.status).toBe("environment-error");
+      expect(pf.executed.runner).toBe("go");
+      expect(pf.executed.error).toMatch(/go toolchain could not be prepared/);
+      expect(pf.executed.failed ?? 0).toBe(0); // no test or build failure — the run never got there
+    } finally {
+      if (prev === undefined) delete process.env["GOTOOLCHAIN"];
+      else process.env["GOTOOLCHAIN"] = prev;
+    }
+  }, 60_000);
 });

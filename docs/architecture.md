@@ -65,15 +65,24 @@ the selected `_test.go` files map to their package dirs and run in one `go test 
 pass/fail records (attributed back to a selected test file per package, so a failure keeps its
 graph path to the change). The go toolchain builds before it tests, so a **compile error is the
 executed result** — surfaced as a failure carrying the compiler output, never a runner crash;
-`go` absent is a `runner-unavailable` status naming what was tried. The pytest run reuses the repo's virtualenv when present (`.venv/bin/
+`go` absent is a `runner-unavailable` status naming what was tried; when `go` exists but its
+toolchain can't be resolved (a `GOTOOLCHAIN` download fails), that's a distinct
+`environment-error` carrying go's own message — an environment fault, not the change's. The
+pytest run reuses the repo's virtualenv when present (`.venv/bin/
 python` or `$VIRTUAL_ENV` — the Python analog of the node_modules symlink), puts the worktree's
 module roots on `PYTHONPATH` so the change under test is what runs, and parses the JUnit report
-with the same parser `keel ci` uses. It runs with `--continue-on-collection-errors` so one
-broken sub-project (e.g. an `examples/` tree importing a package not in the venv) can't abort
-the whole run: those surface as their own `collection-error` failure records, coexisting with
-the real results. When pytest isn't installed for the chosen interpreter, `preflight` returns a
-distinct `runner-unavailable` status naming the interpreter (and `verdict` warns) rather than
-pretending to have executed anything — proof over prediction.
+with the same parser `keel ci` uses. Two shapes of broken sub-project are handled distinctly: a
+test *module* that fails to import is a recoverable collection error (`--continue-on-collection-
+errors` keeps the run going, and it surfaces as its own `collection-error` record); a broken
+**conftest.py**, however, is fatal to the whole session regardless of that flag and yields no
+report at all. keel defends with a bounded exclude-and-retry loop — detect the offending conftest
+in the output, record a `collection-error` for every selected test under its directory subtree,
+and re-run with the rest (at most 3 retries, each provably removing ≥1 subtree, wall-time budget
+cumulative). The final result merges real executed failures with the collection errors; status
+reflects the executed tests, and by construction a `failed` status always carries at least one
+failure — never a silent failed-with-empty-failures. When pytest isn't installed for the chosen
+interpreter, `preflight` returns a distinct `runner-unavailable` status naming the interpreter
+(and `verdict` warns) rather than pretending to have executed anything — proof over prediction.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

@@ -195,7 +195,12 @@ coexist; that's honest, see docs/architecture.md). `get_dependencies`/`get_impac
 work on Python (`test_*.py`/`*_test.py`/`tests/` selection). The sandbox now EXECUTES Python too:
 it picks the runner from the selected tests (pytest for Python, else vitest/jest/node), reuses the
 repo's virtualenv (`.venv`/`$VIRTUAL_ENV`), puts the worktree's module roots on `PYTHONPATH`, and
-parses the JUnit report with the `keel ci` parser. When pytest isn't installed for the chosen
+parses the JUnit report with the `keel ci` parser. A broken **conftest.py** (an ImportError while
+loading it) is fatal to pytest regardless of `--continue-on-collection-errors`, so the runner uses
+a bounded exclude-and-retry loop: detect the offending conftest, record a `collection-error` for
+every selected test under its subtree, and re-run with the rest (≤3 retries, each removing ≥1
+subtree, budget cumulative). Real failures and collection errors merge; a `failed` status always
+carries ≥1 failure — never failed-with-empty. When pytest isn't installed for the chosen
 interpreter, `preflight` returns a distinct `runner-unavailable` status naming it (and `verdict`
 warns) rather than pretending.
 
@@ -214,7 +219,9 @@ execution** is done too (`simulate/sandbox.ts`): the selected `_test.go` files m
 dirs and run in one `go test -json -run . <pkgs>` pass in the worktree, the `-json` stream parsed
 into normalized pass/fail (attributed to a test file per package for the graph path). go builds
 before it tests, so a compile error IS the executed result — a failure with the compiler output,
-not a crash; `go` absent is a `runner-unavailable` status. Runner dispatch in `runSandbox` is
+not a crash; `go` absent is a `runner-unavailable` status, while `go` present but a failed
+toolchain resolution (`GOTOOLCHAIN` download) is a distinct `environment-error` carrying go's
+message. Runner dispatch in `runSandbox` is
 `isPythonTest` → pytest, `isGoTest` → `go test`, else the JS runners.
 
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
