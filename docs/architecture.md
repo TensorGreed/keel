@@ -24,12 +24,28 @@ See `concept.md` for the product rationale; this doc is the engineering view.
 Nodes: files, exported symbols, API endpoints, DB tables (later: services).
 Edges: imports, calls, reads/writes, exposes.
 
-- **v0 (now):** file-level import graph via the TypeScript compiler API
+- **v0:** file-level import graph via the TypeScript compiler API
   (`ts.preProcessFile` + module resolution). Cheap, correct, zero config.
 - **v1:** symbol-level edges (which export is actually used), tsconfig path aliases,
   monorepo workspaces.
-- **v2:** tree-sitter based extraction for additional languages; persist the graph
-  incrementally instead of rebuilding.
+- **v2 (now):** a language-agnostic composer over a `LanguageScanner` seam
+  (`src/graph/scanner.ts`). Each scanner owns a set of extensions and answers two questions
+  about a file — parse (imports + symbols + exports) and resolve (specifier → in-repo file).
+  TypeScript is the compiler-API scanner; **Python** is a tree-sitter scanner using
+  web-tree-sitter (WASM, so `npm install` compiles nothing; the grammar ships as an asset).
+  The graph is persisted incrementally, keyed by git HEAD.
+
+**Multi-language, one graph — no cross-language edges yet.** A repo's TS and Python files live
+in the same graph and coexist, but keel does not model edges *between* languages (e.g. a Python
+service shelling out to a Node script, or an FFI boundary). That's honest: such edges aren't
+import edges and inferring them reliably is future work. Within each language the graph is
+complete; across languages, files simply sit side by side.
+
+**Execution is TS/JS-only for now.** Graph analysis, impact, and test selection are
+language-agnostic and work on Python (`test_*.py` / `*_test.py` / `tests/` selection). The
+flight simulator's sandbox runner is not: it runs vitest/jest/node. On a Python change,
+`preflight` returns a `runner-unsupported` status (and `verdict` warns) rather than pretending
+to have executed anything — proof over prediction.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

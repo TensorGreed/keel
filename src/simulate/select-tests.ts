@@ -28,14 +28,16 @@ export interface TestSelection {
 }
 
 const TEST_FILE_RE = /\.(test|spec)\.(c|m)?[jt]sx?$/;
+/** pytest/unittest convention: test_*.py and *_test.py (also .pyi). */
+const PY_TEST_FILE_RE = /^test_.*\.pyi?$|_test\.pyi?$/;
 const TEST_DIRS = new Set(["__tests__", "test", "tests"]);
 
-/** Whether a repo-relative source path is a test file, by convention. */
+/** Whether a repo-relative source path is a test file, by convention (JS + Python). */
 export function isTestFile(relPosixPath: string): boolean {
   if (!isGraphSourcePath(relPosixPath)) return false;
   const segments = relPosixPath.split("/");
   const base = segments[segments.length - 1] ?? "";
-  if (TEST_FILE_RE.test(base)) return true;
+  if (TEST_FILE_RE.test(base) || PY_TEST_FILE_RE.test(base)) return true;
   return segments.slice(0, -1).some((seg) => TEST_DIRS.has(seg));
 }
 

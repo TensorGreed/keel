@@ -33,7 +33,10 @@ import { initGraphScanners } from "./scanners.js";
 const execFileAsync = promisify(execFile);
 
 const CACHE_FILE = "graph.json";
-const CONFIG_BASENAMES = new Set(["package.json", "jsconfig.json", "pnpm-workspace.yaml", "pnpm-workspace.yml"]);
+const CONFIG_BASENAMES = new Set([
+  "package.json", "jsconfig.json", "pnpm-workspace.yaml", "pnpm-workspace.yml",
+  "pyproject.toml", "setup.cfg", // Python resolution roots (src/ layout package-dir)
+]);
 
 export type GraphSource = "memory" | "disk" | "incremental" | "rebuild";
 

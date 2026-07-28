@@ -33,6 +33,7 @@ export type RunStatus =
   | "no-tests"
   | "apply-failed"
   | "timed-out"
+  | "runner-unsupported"
   | "error";
 
 export interface TestFailure {

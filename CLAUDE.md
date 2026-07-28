@@ -179,3 +179,13 @@ tool ranks who should review a change (excluding bots, an optional `author`, and
 via `git config user.name`); `context` attaches per-candidate `owners`; and the verdict gains a
 soft `warnOnForeignCode` policy flag (default off) that warns when a change touches files whose
 top author isn't the committer. Deterministic ETL, no model calls.
+
+Phase 5 (widen) is underway. Item 1, **Python graph analysis**, is done. The graph builder is now
+a language-agnostic composer over a `LanguageScanner` seam (`graph/scanner.ts`): TypeScript is the
+compiler-API scanner, Python is a web-tree-sitter (WASM) scanner whose grammar ships as an asset
+(zero-build install). Python imports (absolute/relative/star), module resolution (packages, src/
+layouts, namespace packages), and exports (def/class/assign, `__all__`) are supported; the cache
+(format v2) holds mixed TS+Python repos in one graph — with **no cross-language edges yet** (files
+coexist; that's honest, see docs/architecture.md). `get_dependencies`/`get_impact`/`select_tests`
+work on Python (`test_*.py`/`*_test.py`/`tests/` selection); the sandbox sim runner stays TS/JS-only,
+so `preflight` returns a `runner-unsupported` status and `verdict` warns rather than pretending.

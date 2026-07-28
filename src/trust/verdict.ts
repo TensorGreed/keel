@@ -55,6 +55,10 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     else push("sim", "warn", `${detail} (requireSimPass is off)`);
   } else if (sim.status === "passed") {
     push(policy.requireSimPass ? "requireSimPass" : "sim", "pass", `all ${sim.passed ?? 0} selected test(s) passed`);
+  } else if (sim.status === "runner-unsupported") {
+    // We selected the tests but can't execute them yet (e.g. Python). Don't pretend it passed;
+    // don't hard-block either — warn that this change is unverified by the sim.
+    push("sim", "warn", `the change's tests couldn't be executed${sim.error ? ` (${sim.error})` : ""} — verify manually`);
   } else if (sim.status === "no-tests" && facts.changedFiles.some((f) => f.inGraph)) {
     // The diff applied but nothing exercises it — a real (soft) blind spot.
     push("coverage", "warn", "the change applied cleanly but no tests cover it");

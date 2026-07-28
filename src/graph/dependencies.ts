@@ -246,8 +246,9 @@ export function isGraphSourcePath(relPosixPath: string): boolean {
   return GRAPH_EXTENSIONS.has(path.posix.extname(relPosixPath));
 }
 
-/** On-disk graph format; bump when the serialized shape changes so stale caches are dropped. */
-export const GRAPH_FORMAT_VERSION = 1;
+/** On-disk graph format; bump when the serialized shape changes so stale caches are dropped.
+ *  v2: multi-language graphs (a v1 cache was TS/JS-only) — bumping invalidates them cleanly. */
+export const GRAPH_FORMAT_VERSION = 2;
 
 export interface SerializedFileGraph {
   version: number;

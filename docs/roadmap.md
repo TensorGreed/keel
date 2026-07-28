@@ -73,7 +73,14 @@ tests, decisions, and risks for a change before a line is written.
 Goal: the same substrate over more languages, more sources, and more than one repo.
 **Demo:** graph + sim answers on a Python service, with decisions mined from its ADRs.
 
-- [ ] Python support: tree-sitter graph extraction alongside the TS compiler API
+- [x] Python support: tree-sitter (web-tree-sitter WASM) graph extraction alongside the TS
+      compiler API, behind a LanguageScanner seam
+  - [x] Language seam: LanguageScanner interface; the TS builder moved behind it (pure refactor)
+  - [x] Python scanner: imports (abs/relative/star), resolution (packages, src/ layouts,
+        namespace packages), exports (def/class/assign, __all__); zero-build WASM grammar
+  - [x] Multi-language cache + mixed TS+Python repos (one graph, no cross-language edges yet);
+        get_dependencies/get_impact/select_tests work on Python; sim runner stays TS/JS-only
+        (preflight returns `runner-unsupported` for Python rather than pretending)
 - [ ] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
 - [ ] ADR ingestion into the decision index: Markdown ADRs as first-class decision records
