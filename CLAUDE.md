@@ -250,7 +250,10 @@ the concrete bean Spring wires in, so an import-only graph misses it. The pass r
 (stereotype annotations), injection points (constructor params, `@Autowired` fields/setters,
 Lombok-generated constructors, `@Bean` method params), and each bean's interfaces/superclass, then
 edges each injector to every satisfying bean — an interface's impls, a concrete bean, or the
-`@Configuration` producing it via `@Bean`. Deterministic; resolution is by simple type name (a
+`@Configuration` producing it via `@Bean`. A `@Qualifier("name")` narrows those candidates to the
+matching bean (matched against its default decapitalized name, its stereotype value like
+`@Service("name")`, or a class-level `@Qualifier`); a qualifier matching nothing keel can see is
+ignored rather than dropping the edge. Deterministic; resolution is by simple type name (a
 conservative over-approximation — a collision only *adds* edges, safe for blast radius). These edges
 are cross-file (an impl reroutes an injector elsewhere), so they compute only in a full
 `buildFileGraph`; any `.java` change forces a full rebuild rather than an incremental update, keeping

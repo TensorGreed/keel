@@ -110,8 +110,9 @@ Goal: the same substrate over more languages, more sources, and more than one re
   - [x] Spring DI edges: a Java graph-enrichment pass adding the runtime wiring imports miss —
         beans (stereotypes), injection points (constructor/@Autowired/Lombok/@Bean-method params),
         and interface→implementation resolution, so an injected interface edges to every impl and a
-        @Bean-produced type edges to its @Configuration; cross-file, so a Java change forces a full
-        rebuild (graph format v3)
+        @Bean-produced type edges to its @Configuration; `@Qualifier` narrows to the named bean
+        (default/stereotype/@Qualifier name), conservatively keeping all when it matches nothing;
+        cross-file, so a Java change forces a full rebuild (graph format v3)
 - [x] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
   - [x] CI connector: `keel ci` ingests JUnit reports into ci_run events (universal, no deps,

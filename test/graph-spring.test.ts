@@ -46,6 +46,32 @@ describe("spring DI edges", () => {
     expect(radius).toContain("src/test/java/com/example/app/OrderServiceTest.java");
   });
 
+  const implEdges = (cls: string): string[] =>
+    reportFor(g, `${M}/app/${cls}`).dependencies.filter((d) => d.startsWith(`${M}/impl/`));
+
+  it("narrows an interface injection to the impl named by @Qualifier (explicit bean name)", () => {
+    // QualifiedService injects @Qualifier("fast"); FastGateway is @Component("fast").
+    expect(implEdges("QualifiedService.java")).toEqual([`${M}/impl/FastGateway.java`]);
+  });
+
+  it("narrows via a bean's default (decapitalized class) name", () => {
+    // DefaultNameService injects @Qualifier("paypalGateway") — the default name of PaypalGateway.
+    expect(implEdges("DefaultNameService.java")).toEqual([`${M}/impl/PaypalGateway.java`]);
+  });
+
+  it("keeps all candidates when a @Qualifier matches no known bean (stays conservative)", () => {
+    // "ghostBean" names nothing in the repo, so we don't drop the edge — all impls remain.
+    expect(implEdges("LooseService.java").sort()).toEqual([
+      `${M}/impl/FastGateway.java`, `${M}/impl/PaypalGateway.java`, `${M}/impl/StripeGateway.java`,
+    ]);
+  });
+
+  it("edges to every impl when the injection is unqualified", () => {
+    expect(implEdges("OrderService.java").sort()).toEqual([
+      `${M}/impl/FastGateway.java`, `${M}/impl/PaypalGateway.java`, `${M}/impl/StripeGateway.java`,
+    ]);
+  });
+
   it("does not invent DI edges from a bean it does not inject", () => {
     // AuditLog injects nothing, so it depends on no bean (its only edges would be real imports).
     expect(reportFor(g, `${M}/audit/AuditLog.java`).dependencies).toEqual([]);

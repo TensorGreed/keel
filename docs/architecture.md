@@ -74,10 +74,15 @@ beans (stereotype annotations), their injection points (constructor params, `@Au
 fields/setters, Lombok-generated constructors, `@Bean` method params), and the interface/superclass
 each bean implements, then adds an edge from each injecting bean to every bean that could satisfy the
 injection — an interface's implementations, a concrete bean of the type, or the `@Configuration` that
-produces it via a `@Bean` method. It's deterministic static analysis, never a guess (principle 2).
-Resolution is by simple type name — a deliberate, conservative over-approximation: a cross-package
-name collision can only *add* edges, and blast radius is already a safe over-approximation (a
-superset of tests is fine; a missed one is not). Because these edges are inherently cross-file (an
+produces it via a `@Bean` method. A `@Qualifier("name")` at the injection point *narrows* those
+candidates to the bean whose name matches — a bean's names being its default (decapitalized class
+name, per `Introspector.decapitalize`), its stereotype value (`@Service("name")`), or a class-level
+`@Qualifier`; a qualifier that matches no bean keel can see is ignored (keep all candidates) rather
+than dropping the edge. It's deterministic static analysis, never a guess (principle 2). Resolution
+is by simple type name — a deliberate, conservative over-approximation: a cross-package name
+collision can only *add* edges, and blast radius is already a safe over-approximation (a superset of
+tests is fine; a missed one is not). Qualifier narrowing only *removes* candidates once a concrete
+match is found, so it never leaves an injection with no edge. Because these edges are inherently cross-file (an
 impl in file A reroutes an injector in file B), the pass runs only in a full `buildFileGraph`; any
 `.java` change forces a full rebuild rather than an incremental update, which keeps the cache
 provably correct (see `graph/cache.ts`). Bean field/setter *interface* injection is where this earns

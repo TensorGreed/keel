@@ -3,21 +3,27 @@
  *
  * Spring wires beans together at runtime, and the most valuable coupling it creates is invisible to
  * imports: a `@Service` that injects a `PaymentGateway` *interface* imports the interface, never the
- * concrete `StripeGateway` bean Spring actually wires in — yet changing that impl changes the
- * service's behaviour. An import-only graph misses it. This pass adds an edge from an injecting bean
- * to every concrete bean that could satisfy the injection (an interface's implementations, or a
- * `@Bean`-produced type's factory), so blast radius and test selection account for DI wiring.
+ * concrete `StripeGateway` bean Spring wires in — yet changing that impl changes the service's
+ * behaviour. An import-only graph misses it. This pass adds an edge from an injecting bean to every
+ * concrete bean that could satisfy the injection (an interface's implementations, a concrete bean of
+ * the type, or the `@Configuration` that produces it via `@Bean`), so blast radius and test
+ * selection account for DI wiring.
  *
- * Deterministic static analysis — never a guess (docs/architecture.md, principle 2). It reads the
- * beans (stereotype annotations), their injection points (constructor params, `@Autowired`
- * fields/setters, Lombok-generated constructors, `@Bean` method params), and the interface/superclass
- * each bean implements, then resolves injected type names against a repo-wide bean index.
+ * When an injection point carries `@Qualifier("name")` (or the field/parameter otherwise names a
+ * specific bean), the candidate set is narrowed to the bean(s) whose name matches — a bean's names
+ * being its default (decapitalized class name), its stereotype value (`@Service("name")`), or a
+ * class-level `@Qualifier`. A qualifier that matches nothing in the repo is ignored (we keep all
+ * candidates) rather than dropping the edge — see the over-approximation note below.
+ *
+ * Deterministic static analysis — never a guess (docs/architecture.md, principle 2). Resolution is
+ * by simple type name, a deliberate, conservative over-approximation: a name collision across
+ * packages can only *add* edges, and blast radius is already a safe over-approximation (a superset
+ * of tests is fine, a missed test is not). `@Qualifier` narrowing *removes* edges, so it only ever
+ * fires when a concrete matching bean is found — never leaving an injection with no candidate.
  *
  * Because these edges are inherently cross-file (an impl in file A changes an injector in file B),
  * they are computed only in a full `buildFileGraph`; any `.java` change forces a full rebuild rather
- * than an incremental one (see graph/cache.ts). Resolution is by simple type name — a deliberate,
- * conservative over-approximation: a name collision across packages can only *add* edges, and blast
- * radius is already a safe over-approximation (a superset of tests is fine, a missed test is not).
+ * than an incremental one (see graph/cache.ts).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -44,6 +50,16 @@ const NOT_A_BEAN = new Set([
   "T", "E", "K", "V", "R", "U", "S",
 ]);
 
+/** One injection point: the candidate bean type names it needs, and its `@Qualifier`, if any. */
+interface InjectionPoint {
+  types: string[];
+  qualifier?: string;
+}
+/** A bean that can satisfy an injection: its file and the names it answers to (for @Qualifier). */
+interface BeanRef {
+  file: string;
+  names: string[];
+}
 interface JavaTypeMeta {
   file: string;
   /** the type's simple name */
@@ -52,10 +68,12 @@ interface JavaTypeMeta {
   supers: string[];
   /** whether the type is a Spring bean (carries a stereotype) */
   isBean: boolean;
-  /** simple type names this bean injects (constructor/@Autowired/Lombok/@Bean-method params) */
-  injects: Set<string>;
-  /** @Bean method return types this (config) bean produces — a factory for those types */
-  produces: string[];
+  /** the names this bean answers to: default (decapitalized), stereotype value, class @Qualifier */
+  beanNames: string[];
+  /** the bean's injection points (constructor/@Autowired/Lombok/@Bean-method params + fields) */
+  injections: InjectionPoint[];
+  /** @Bean-produced types this (config) bean is a factory for, each with the bean's names */
+  produces: { type: string; names: string[] }[];
 }
 
 const simpleName = (text: string): string => text.split(".").pop() ?? text;
@@ -71,19 +89,6 @@ function descendantsOfType(node: Node, type: string): Node[] {
   return out;
 }
 
-/** Annotation simple-names on a `modifiers` node (both `@Marker` and `@Anno(...)` forms). */
-function annotationNames(modifiers: Node | null): Set<string> {
-  const names = new Set<string>();
-  if (!modifiers) return names;
-  for (const child of modifiers.namedChildren) {
-    if (child && (child.type === "marker_annotation" || child.type === "annotation")) {
-      const id = child.namedChildren.find((c) => c?.type === "identifier" || c?.type === "scoped_identifier");
-      if (id) names.add(simpleName(id.text));
-    }
-  }
-  return names;
-}
-
 function modifiersOf(node: Node): Node | null {
   return node.namedChildren.find((c) => c?.type === "modifiers") ?? null;
 }
@@ -92,8 +97,65 @@ function hasModifier(modifiers: Node | null, keyword: string): boolean {
   return modifiers ? modifiers.children.some((c) => c?.type === keyword) : false;
 }
 
+/** Annotation simple-names on a `modifiers` node (both `@Marker` and `@Anno(...)` forms). */
+function annotationNames(modifiers: Node | null): Set<string> {
+  const names = new Set<string>();
+  if (!modifiers) return names;
+  for (const anno of annotationNodes(modifiers)) {
+    const id = anno.namedChildren.find((c) => c?.type === "identifier" || c?.type === "scoped_identifier");
+    if (id) names.add(simpleName(id.text));
+  }
+  return names;
+}
+
+function annotationNodes(modifiers: Node | null): Node[] {
+  if (!modifiers) return [];
+  return modifiers.namedChildren.filter((c): c is Node => c?.type === "marker_annotation" || c?.type === "annotation");
+}
+
+/** The `@Name(...)` annotation node on `modifiers`, by simple name. */
+function findAnnotation(modifiers: Node | null, name: string): Node | undefined {
+  return annotationNodes(modifiers).find((anno) => {
+    const id = anno.namedChildren.find((c) => c?.type === "identifier" || c?.type === "scoped_identifier");
+    return id ? simpleName(id.text) === name : false;
+  });
+}
+
+/** The string argument of an annotation (`@Service("x")` / `@Qualifier(value="x")` → "x"). */
+function stringArg(anno: Node | undefined): string | undefined {
+  if (!anno) return undefined;
+  const argList = anno.namedChildren.find((c) => c?.type === "annotation_argument_list");
+  return argList ? descendantsOfType(argList, "string_fragment")[0]?.text : undefined;
+}
+
+/** The `@Qualifier` value at an injection point (a field/parameter's modifiers), if any. */
+function qualifierOf(modifiers: Node | null): string | undefined {
+  return stringArg(findAnnotation(modifiers, "Qualifier"));
+}
+
+/** Spring's default bean name: java.beans.Introspector.decapitalize — lowercase the first char
+ *  unless the first two are both upper case (so `URLParser` stays `URLParser`). */
+function decapitalize(name: string): string {
+  if (name.length === 0) return name;
+  if (name.length > 1 && name[0] === name[0]!.toUpperCase() && name[1] === name[1]!.toUpperCase()) return name;
+  return name[0]!.toLowerCase() + name.slice(1);
+}
+
+/** The names a bean answers to for @Qualifier matching. Includes the default and the raw class name
+ *  (harmless extra — over-matching only adds edges), plus any stereotype/@Qualifier value. */
+function beanNamesOf(className: string, classModifiers: Node | null): string[] {
+  const names = new Set([decapitalize(className), className]);
+  for (const st of STEREOTYPES) {
+    const v = stringArg(findAnnotation(classModifiers, st));
+    if (v) names.add(v);
+  }
+  const q = stringArg(findAnnotation(classModifiers, "Qualifier"));
+  if (q) names.add(q);
+  return [...names];
+}
+
 /** Collect the bean type names in an injected type expression: unwrap generics/arrays/`List<T>` and
- *  drop wrapper and java.lang names, so `List<Notifier>` → {Notifier}, `PaymentGateway` → {gateway}. */
+ *  drop wrapper and java.lang names, so `List<Notifier>` → {Notifier}, `PaymentGateway` → {…}. */
 function collectInjectedTypes(typeNode: Node | null, out: Set<string>): void {
   if (!typeNode) return;
   const t = typeNode.type;
@@ -112,6 +174,19 @@ function paramType(param: Node): Node | null {
   return param.childForFieldName("type") ?? param.namedChildren.find((c) => c?.type.endsWith("type") || c?.type.endsWith("type_identifier")) ?? null;
 }
 
+/** An injection point from a formal parameter: its bean types + the parameter's own @Qualifier. */
+function pointFromParam(param: Node): InjectionPoint | null {
+  const types = new Set<string>();
+  collectInjectedTypes(paramType(param), types);
+  if (types.size === 0) return null;
+  const qualifier = qualifierOf(modifiersOf(param));
+  return { types: [...types], ...(qualifier ? { qualifier } : {}) };
+}
+
+function paramsOf(member: Node): Node[] {
+  return (member.childForFieldName("parameters")?.namedChildren ?? []).filter((p): p is Node => p?.type === "formal_parameter");
+}
+
 /** Extract the injectable Spring metadata for one Java file (its top-level types). */
 function extractTypes(file: string, content: string): JavaTypeMeta[] {
   const root = parseJava(content);
@@ -122,7 +197,8 @@ function extractTypes(file: string, content: string): JavaTypeMeta[] {
     if (!decl || decl.type !== "class_declaration") continue; // beans are classes
     const name = decl.childForFieldName("name")?.text;
     if (!name) continue;
-    const classAnnos = annotationNames(modifiersOf(decl));
+    const classMods = modifiersOf(decl);
+    const classAnnos = annotationNames(classMods);
     const isBean = [...classAnnos].some((a) => STEREOTYPES.has(a));
 
     const supers: string[] = [];
@@ -131,8 +207,8 @@ function extractTypes(file: string, content: string): JavaTypeMeta[] {
     const superclass = decl.childForFieldName("superclass") ?? decl.namedChildren.find((c) => c?.type === "superclass");
     if (superclass) for (const ti of descendantsOfType(superclass, "type_identifier")) supers.push(ti.text);
 
-    const injects = new Set<string>();
-    const produces: string[] = [];
+    const injections: InjectionPoint[] = [];
+    const produces: { type: string; names: string[] }[] = [];
     const body = decl.namedChildren.find((c) => c?.type === "class_body");
     if (isBean && body) {
       const lombokAll = [...classAnnos].some((a) => LOMBOK_ALL.has(a));
@@ -141,31 +217,46 @@ function extractTypes(file: string, content: string): JavaTypeMeta[] {
         if (!member) continue;
         if (member.type === "constructor_declaration") {
           // A bean's constructor parameters are injected (Spring auto-wires the sole constructor).
-          for (const p of member.childForFieldName("parameters")?.namedChildren ?? []) {
-            if (p?.type === "formal_parameter") collectInjectedTypes(paramType(p), injects);
+          for (const p of paramsOf(member)) {
+            const point = pointFromParam(p);
+            if (point) injections.push(point);
           }
         } else if (member.type === "field_declaration") {
           const mods = modifiersOf(member);
           const annotated = [...annotationNames(mods)].some((a) => INJECT_ANNOTATIONS.has(a));
           const lombokField = lombokAll || (lombokReq && hasModifier(mods, "final"));
-          if (annotated || lombokField) collectInjectedTypes(member.childForFieldName("type"), injects);
+          if (annotated || lombokField) {
+            const t = new Set<string>();
+            collectInjectedTypes(member.childForFieldName("type"), t);
+            if (t.size > 0) {
+              const qualifier = qualifierOf(mods);
+              injections.push({ types: [...t], ...(qualifier ? { qualifier } : {}) });
+            }
+          }
         } else if (member.type === "method_declaration") {
-          const annos = annotationNames(modifiersOf(member));
+          const mods = modifiersOf(member);
+          const annos = annotationNames(mods);
           const isSetter = [...annos].some((a) => INJECT_ANNOTATIONS.has(a));
           const isBeanMethod = annos.has("Bean");
           if (isSetter || isBeanMethod) {
-            for (const p of member.childForFieldName("parameters")?.namedChildren ?? []) {
-              if (p?.type === "formal_parameter") collectInjectedTypes(paramType(p), injects);
+            for (const p of paramsOf(member)) {
+              const point = pointFromParam(p);
+              if (point) injections.push(point);
             }
           }
           if (isBeanMethod) {
             const ret = member.childForFieldName("type");
-            if (ret?.type === "type_identifier") produces.push(ret.text);
+            if (ret?.type === "type_identifier") {
+              const methodName = member.childForFieldName("name")?.text;
+              const names = [stringArg(findAnnotation(mods, "Bean")), stringArg(findAnnotation(mods, "Qualifier")), methodName]
+                .filter((n): n is string => Boolean(n));
+              produces.push({ type: ret.text, names });
+            }
           }
         }
       }
     }
-    types.push({ file, name, supers, isBean, injects, produces });
+    types.push({ file, name, supers, isBean, beanNames: isBean ? beanNamesOf(name, classMods) : [], injections, produces });
   }
   return types;
 }
@@ -173,8 +264,8 @@ function extractTypes(file: string, content: string): JavaTypeMeta[] {
 /**
  * Compute the Spring DI edges for a repo's Java files and merge them into the graph's import maps.
  * Adds an edge (symbol "*") from each injecting bean file to every bean file that could satisfy an
- * injection: a concrete bean of the injected type, an implementation of an injected interface, or
- * the `@Configuration` that produces the type via a `@Bean` method. Mutates `imports`/`importSymbols`.
+ * injection — narrowed by `@Qualifier` when one is present and matches a known bean. Mutates
+ * `imports`/`importSymbols`.
  */
 export function applySpringEdges(
   root: string,
@@ -193,24 +284,25 @@ export function applySpringEdges(
     all.push(...extractTypes(rel, content));
   }
 
-  // Repo-wide bean index: a simple type name → the bean files that satisfy an injection of it. A
-  // concrete bean class contributes its own name; an @Bean factory contributes its produced types;
-  // a bean contributes every interface/superclass it implements (so an interface injection resolves
-  // to its implementations).
-  const beanIndex = new Map<string, Set<string>>();
-  const add = (typeName: string, file: string): void => {
-    let set = beanIndex.get(typeName);
-    if (!set) {
-      set = new Set();
-      beanIndex.set(typeName, set);
+  // Repo-wide bean index: a simple type name → the beans that satisfy an injection of it. A concrete
+  // bean class contributes its own name; a bean contributes every interface/superclass it implements
+  // (so an interface injection resolves to its implementations); an @Bean factory contributes its
+  // produced types. Each entry carries the bean's names, for @Qualifier narrowing.
+  const beanIndex = new Map<string, BeanRef[]>();
+  const add = (typeName: string, ref: BeanRef): void => {
+    let list = beanIndex.get(typeName);
+    if (!list) {
+      list = [];
+      beanIndex.set(typeName, list);
     }
-    set.add(file);
+    list.push(ref);
   };
   for (const t of all) {
     if (!t.isBean) continue;
-    add(t.name, t.file);
-    for (const s of t.supers) add(s, t.file);
-    for (const p of t.produces) add(p, t.file);
+    const self: BeanRef = { file: t.file, names: t.beanNames };
+    add(t.name, self);
+    for (const s of t.supers) add(s, self);
+    for (const p of t.produces) add(p.type, { file: t.file, names: p.names });
   }
 
   const addEdge = (from: string, to: string): void => {
@@ -236,8 +328,17 @@ export function applySpringEdges(
 
   for (const t of all) {
     if (!t.isBean) continue;
-    for (const injected of t.injects) {
-      for (const target of beanIndex.get(injected) ?? []) addEdge(t.file, target);
+    for (const ip of t.injections) {
+      const candidates: BeanRef[] = [];
+      for (const type of ip.types) candidates.push(...(beanIndex.get(type) ?? []));
+      // @Qualifier narrows to the matching bean(s). If it matches nothing here (the qualifier names
+      // a bean keel can't see), keep all candidates rather than drop the edge — stay conservative.
+      let chosen = candidates;
+      if (ip.qualifier) {
+        const matched = candidates.filter((r) => r.names.includes(ip.qualifier!));
+        if (matched.length > 0) chosen = matched;
+      }
+      for (const r of chosen) addEdge(t.file, r.file);
     }
   }
 }
