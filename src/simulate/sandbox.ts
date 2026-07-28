@@ -29,7 +29,7 @@ const DEFAULT_MAX_TESTS = 50;
 const MAX_CAPTURE_BYTES = 512 * 1024; // cap captured output so a chatty run can't OOM us
 const OUTPUT_TAIL = 8_000;
 
-export type Runner = "vitest" | "jest" | "node" | "pytest" | "go";
+export type Runner = "vitest" | "jest" | "node" | "pytest" | "go" | "mvn" | "gradle";
 
 export type RunStatus =
   | "passed"
@@ -152,6 +152,10 @@ function isPythonTest(file: string): boolean {
 
 function isGoTest(file: string): boolean {
   return file.endsWith("_test.go");
+}
+
+function isJavaTest(file: string): boolean {
+  return file.endsWith(".java");
 }
 
 function isFile(p: string): boolean {
@@ -723,6 +727,217 @@ async function runGoTest(
   };
 }
 
+// --- Java: mvn / gradle ----------------------------------------------------
+
+/** A dependency-resolution or toolchain fault (no JDK, offline, wrapper download) — distinct from a
+ *  source compile error. Checked first, so an env problem isn't mislabelled a compilation failure. */
+const JAVA_ENV_ERROR_RE = /Could not resolve dependencies|Could not (?:download|transfer|find artifact)|Cannot access .* in offline mode|Non-resolvable|JAVA_HOME|Unable to locate a Java Runtime|No compiler is provided|tools\.jar|Could not determine java version|requires Java|Could not create service|Unsupported class file major version|Could not (?:install|download) Gradle distribution|Network is unreachable/i;
+/** A source compilation failure — an executed result (the build compiled the change and it failed),
+ *  surfaced as a failure carrying the compiler output, same rule as Go. */
+const JAVA_COMPILE_ERROR_RE = /COMPILATION ERROR|compileJava\w* FAILED|cannot find symbol|error: (?:cannot|incompatible|method|class )|';' expected|reached end of file/i;
+
+/** A selected test file → its fully-qualified class name (dir under src/{test,main}/java, dotted). */
+export function javaClassName(relFile: string): string {
+  const m = /src\/(?:test|main)\/java\/(.+)\.java$/.exec(relFile);
+  return m ? m[1]!.split("/").join(".") : path.posix.basename(relFile, ".java");
+}
+
+interface JavaBuild {
+  tool: "mvn" | "gradle";
+  cmd: string;
+  label: string;
+  /** true when cmd is a repo wrapper (./mvnw, ./gradlew) rather than a global install */
+  wrapper: boolean;
+}
+
+/** The build tool for the worktree: Maven if there's a pom, else Gradle; a repo wrapper preferred
+ *  over a global install (it pins the tool version). null when neither is present. */
+function detectJavaBuild(worktree: string): JavaBuild | null {
+  const wrapperName = process.platform === "win32" ? { mvn: "mvnw.cmd", gradle: "gradlew.bat" } : { mvn: "mvnw", gradle: "gradlew" };
+  const hasPom = isFile(path.join(worktree, "pom.xml"));
+  const hasGradle = ["build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"].some((f) => isFile(path.join(worktree, f)));
+  const mvnw = path.join(worktree, wrapperName.mvn);
+  const gradlew = path.join(worktree, wrapperName.gradle);
+  if (hasPom || isFile(mvnw)) {
+    return isFile(mvnw) ? { tool: "mvn", cmd: mvnw, label: `./${wrapperName.mvn}`, wrapper: true } : { tool: "mvn", cmd: "mvn", label: "mvn", wrapper: false };
+  }
+  if (hasGradle || isFile(gradlew)) {
+    return isFile(gradlew) ? { tool: "gradle", cmd: gradlew, label: `./${wrapperName.gradle}`, wrapper: true } : { tool: "gradle", cmd: "gradle", label: "gradle", wrapper: false };
+  }
+  return null;
+}
+
+/** Read every JUnit XML the build tool wrote: Surefire (Maven) or test-results (Gradle). `build`/
+ *  `target` hold these, so we walk without the graph's IGNORED_DIRS filter (which excludes `build`). */
+function readJavaReports(worktree: string, tool: "mvn" | "gradle"): string[] {
+  const wanted = tool === "mvn" ? path.join("target", "surefire-reports") : path.join("build", "test-results", "test");
+  const xmls: string[] = [];
+  const walk = (dir: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name !== ".git" && e.name !== "node_modules") walk(full);
+      } else if (e.isFile() && e.name.startsWith("TEST-") && e.name.endsWith(".xml") && dir.endsWith(wanted)) {
+        try {
+          xmls.push(fs.readFileSync(full, "utf8"));
+        } catch {
+          /* a report that vanished mid-run isn't fatal */
+        }
+      }
+    }
+  };
+  walk(worktree);
+  return xmls;
+}
+
+/** Normalize the build tool's JUnit reports into sandbox counts + failures, attributing each failure
+ *  back to its selected test file (via the JUnit `classname`) so it keeps a graph path to the change. */
+export function javaResults(
+  xmls: string[],
+  fileForClass: Map<string, string>,
+): { passed: number; failed: number; failures: TestFailure[]; total: number } {
+  let passed = 0;
+  const failures: TestFailure[] = [];
+  for (const xml of xmls) {
+    for (const t of parseJUnit(xml).tests) {
+      if (t.status === "passed") {
+        passed++;
+        continue;
+      }
+      if (t.status === "skipped") continue;
+      const file = t.classname ? fileForClass.get(t.classname) : undefined;
+      const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
+      const rawTrace = t.details ?? t.systemOut;
+      const trace = rawTrace ? capLines(stripAnsi(rawTrace).trim(), MAX_TRACE_LINES) : undefined;
+      failures.push({ name: t.name || "(unnamed test)", ...(file ? { file } : {}), message, ...(trace && trace !== message ? { trace } : {}) });
+    }
+  }
+  return { passed, failed: failures.length, failures, total: passed + failures.length };
+}
+
+/**
+ * Run the selected Java tests via the project's build tool (Maven or Gradle), returning normalized
+ * results. Tests run per CLASS: the selected files map to fully-qualified class names and run in one
+ * `mvn -Dtest=A,B test` / `gradle test --tests A --tests B` invocation. Results come from the
+ * Surefire / Gradle JUnit XML — the same parser `keel ci` uses. These builds are slow, so the whole
+ * build+test runs under one wall-time budget and the output tail is truncated honestly.
+ *
+ * A source compile error is an executed result (like Go): surfaced as a failure with the compiler
+ * output, never a crash. No build tool → runner-unavailable naming what was tried; a toolchain or
+ * dependency-resolution fault → environment-error (same taxonomy as Go). Result sans durationMs.
+ */
+async function runJavaTest(
+  worktree: string,
+  ranTests: string[],
+  timeoutMs: number,
+  capped: { requested: number; ran: number } | undefined,
+): Promise<Omit<SandboxResult, "durationMs">> {
+  const cappedField = capped ? { capped } : {};
+  const build = detectJavaBuild(worktree);
+  if (!build) {
+    return {
+      status: "runner-unavailable",
+      runner: null,
+      ranTests,
+      error: "no Java build tool found (looked for ./mvnw, ./gradlew, mvn, gradle) — add a wrapper or install Maven/Gradle to execute Java tests",
+      ...cappedField,
+    };
+  }
+  // A global tool (not a wrapper) must be on PATH; a wrapper bootstraps itself.
+  if (!build.wrapper) {
+    const check = await runProcess(build.cmd, ["-version"], { cwd: worktree, timeoutMs: 60_000 });
+    if (check.spawnError || check.code !== 0) {
+      return {
+        status: "runner-unavailable",
+        runner: build.tool,
+        ranTests,
+        error: `${build.label} is not available${check.spawnError ? `: ${check.spawnError}` : ""} — install it or add a ${build.tool === "mvn" ? "./mvnw" : "./gradlew"} wrapper to execute Java tests`,
+        ...cappedField,
+      };
+    }
+  }
+
+  const classes = [...new Set(ranTests.map(javaClassName))];
+  const fileForClass = new Map<string, string>();
+  for (const t of ranTests) fileForClass.set(javaClassName(t), fileForClass.get(javaClassName(t)) ?? t);
+
+  const args =
+    build.tool === "mvn"
+      ? ["-B", `-Dtest=${classes.join(",")}`, "-DfailIfNoTests=false", "test"]
+      : ["test", ...classes.flatMap((c) => ["--tests", c]), "--console=plain"];
+  const proc = await runProcess(build.cmd, args, { cwd: worktree, timeoutMs });
+  const combined = tail(stripAnsi(`${proc.stdout}\n${proc.stderr}`));
+  if (proc.timedOut) {
+    return { status: "timed-out", runner: build.tool, ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+  if (proc.spawnError) {
+    return { status: "error", runner: build.tool, ranTests, error: proc.spawnError, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+
+  const results = javaResults(readJavaReports(worktree, build.tool), fileForClass);
+  const output = `${proc.stdout}\n${proc.stderr}`;
+
+  // No test results + a failing build: classify honestly. Env/toolchain faults first (a missing JDK
+  // or an unresolved dependency never compiled the change), then a genuine source compile error.
+  if (results.total === 0 && proc.code !== 0) {
+    if (JAVA_ENV_ERROR_RE.test(output)) {
+      return {
+        status: "environment-error",
+        runner: build.tool,
+        ranTests,
+        error: `the Java build environment could not be prepared: ${firstErrorLine(output)}`,
+        exitCode: proc.code,
+        ...(combined ? { output: combined } : {}),
+        ...cappedField,
+      };
+    }
+    if (JAVA_COMPILE_ERROR_RE.test(output)) {
+      const trace = capLines(stripAnsi(output).trim(), MAX_TRACE_LINES);
+      return {
+        status: "failed",
+        runner: build.tool,
+        ranTests,
+        exitCode: proc.code,
+        passed: 0,
+        failed: 1,
+        failures: [{ name: "(compilation failed)", ...(ranTests[0] ? { file: ranTests[0] } : {}), message: "the Java sources failed to compile", trace }],
+        ...(combined ? { output: combined } : {}),
+        ...cappedField,
+      };
+    }
+  }
+
+  const status: RunStatus = results.total > 0 ? (results.failed > 0 ? "failed" : "passed") : proc.code === 0 ? "no-tests" : "failed";
+  const failedNoResults = status === "failed" && results.failures.length === 0;
+  return {
+    status,
+    runner: build.tool,
+    ranTests,
+    exitCode: proc.code,
+    ...(failedNoResults ? { error: `the ${build.label} run failed (exit ${proc.code ?? "?"}) without producing a test report — see output` } : {}),
+    passed: results.passed,
+    failed: results.failed,
+    failures: results.failures,
+    ...(combined ? { output: combined } : {}),
+    ...cappedField,
+  };
+}
+
+/** The first line of build output that looks like an error — for a one-line env-error summary. */
+function firstErrorLine(output: string): string {
+  const line = stripAnsi(output)
+    .split("\n")
+    .map((l) => l.replace(/^\[[A-Z]+\]\s*/, "").trim()) // drop Maven's [ERROR]/[INFO] prefixes
+    .find((l) => JAVA_ENV_ERROR_RE.test(l));
+  return line || "see output";
+}
+
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -776,12 +991,16 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     if (applyError) return done({ status: "apply-failed", runner: null, ranTests, error: applyError, ...(capped ? { capped } : {}) });
 
     // A change's covering tests are one language (no cross-language edges), so a Python selection
-    // runs under pytest, a Go selection under `go test`; anything else under the JS runners.
+    // runs under pytest, a Go selection under `go test`, a Java selection under mvn/gradle; anything
+    // else under the JS runners.
     if (ranTests.every(isPythonTest)) {
       return done(await runPytest(repoRoot, worktree, parent, ranTests, timeoutMs, capped));
     }
     if (ranTests.every(isGoTest)) {
       return done(await runGoTest(worktree, ranTests, timeoutMs, capped));
+    }
+    if (ranTests.every(isJavaTest)) {
+      return done(await runJavaTest(worktree, ranTests, timeoutMs, capped));
     }
 
     const runner = detectRunner(worktree);

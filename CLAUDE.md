@@ -235,7 +235,15 @@ every file of the package → `*`), and static imports (member → its declaring
 public top-level types (class/interface/enum/record/annotation). Resolution maps package dirs under
 discovered source roots (Maven/Gradle `src/main/java`, `src/test/java`; multi-module via pom.xml
 `<modules>` + settings.gradle `include(...)`, extracted at the regex level — no XML/DSL dependency).
-Spring DI edges between beans are real non-import coupling, deferred to a separate next pass.
+**Java execution** is done too (`simulate/sandbox.ts`): Java tests run per *class* — the selected
+files map to FQ class names and run in one `mvn -Dtest=A,B test` / `gradle test --tests A ...` pass,
+preferring a repo wrapper (`./mvnw`/`./gradlew`) over a global install. Results come from the
+Surefire / Gradle JUnit XML via the existing `keel ci` parser, each failure attributed to its test
+file by `classname`. A compile error IS the executed result (a failure with the compiler output,
+same rule as Go); no build tool → `runner-unavailable`; a toolchain/dependency fault →
+`environment-error`. Runner dispatch in `runSandbox` is now `isPythonTest` → pytest, `isGoTest` →
+`go test`, `isJavaTest` → mvn/gradle, else the JS runners. Spring DI edges between beans are real
+non-import coupling, deferred to a separate next pass.
 
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`

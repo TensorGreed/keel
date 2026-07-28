@@ -103,7 +103,7 @@ Goal: the same substrate over more languages, more sources, and more than one re
         settings.gradle `include(...)`, regex-level, no XML/DSL dep). CRITICAL: same-package
         files are one unit (mutual adjacency across source roots) — types reference each other
         with no import, so import-only edges would miss it
-  - [ ] Java test runner: select test-source-root + *Test.java/*Tests.java/Test*.java via the
+  - [x] Java test runner: select test-source-root + *Test.java/*Tests.java/Test*.java via the
         dependents walk; prefer ./mvnw · ./gradlew over global mvn · gradle; run only the selected
         classes; Surefire/Gradle JUnit XML via the existing parser; compile error IS the executed
         result; no build tool → runner-unavailable; toolchain/env failure → environment-error

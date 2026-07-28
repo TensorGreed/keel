@@ -74,10 +74,11 @@ Python service shelling out to a Node script, or an FFI boundary). That's honest
 aren't import edges and inferring them reliably is future work. Within each language the graph
 is complete; across languages, files simply sit side by side.
 
-**Execution now covers TS/JS, Python, and Go.** Graph analysis, impact, and test selection are
-language-agnostic (`test_*.py` / `*_test.py` / `tests/` for Python; `*_test.go` for Go). The
-sandbox runner picks the runner from the selected tests: **pytest** for Python, **`go test`** for
-Go, else vitest / jest / node. A change's covering tests are one language (there are no
+**Execution now covers TS/JS, Python, Go, and Java.** Graph analysis, impact, and test selection are
+language-agnostic (`test_*.py` / `*_test.py` / `tests/` for Python; `*_test.go` for Go; the test
+source root plus `*Test.java` / `*Tests.java` / `Test*.java` for Java). The sandbox runner picks the
+runner from the selected tests: **pytest** for Python, **`go test`** for Go, **`mvn`/`gradle`** for
+Java, else vitest / jest / node. A change's covering tests are one language (there are no
 cross-language edges), so the selection is homogeneous. Go tests run per *package*, not per file:
 the selected `_test.go` files map to their package dirs and run in one `go test -json -run .
 <pkgs>` pass in the worktree, and the `-json` event stream is parsed into the same normalized
@@ -102,6 +103,18 @@ reflects the executed tests, and by construction a `failed` status always carrie
 failure — never a silent failed-with-empty-failures. When pytest isn't installed for the chosen
 interpreter, `preflight` returns a distinct `runner-unavailable` status naming the interpreter
 (and `verdict` warns) rather than pretending to have executed anything — proof over prediction.
+
+Java runs through the project's build tool. Tests run per *class*: the selected files map to
+fully-qualified class names and run in one `mvn -Dtest=A,B test` / `gradle test --tests A --tests B`
+invocation, preferring a repo wrapper (`./mvnw`, `./gradlew`) over a global install so the tool
+version is pinned. Results come from the Surefire / Gradle JUnit XML — the same parser `keel ci`
+uses — with each failure attributed back to its selected test file via the report's `classname`.
+These builds are slow, so the whole build+test runs under one wall-time budget and the output tail
+is truncated honestly. A source compile error is an executed result, exactly as in Go: the build
+compiled the change and it failed, surfaced as a failure carrying the compiler output rather than a
+crash. The status taxonomy matches the other runners: no build tool at all is `runner-unavailable`
+naming what was tried; a toolchain or dependency-resolution fault (no JDK, an unresolved dependency,
+a wrapper that can't download its distribution) is an `environment-error` — not the change's fault.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

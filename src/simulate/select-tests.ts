@@ -32,14 +32,18 @@ const TEST_FILE_RE = /\.(test|spec)\.(c|m)?[jt]sx?$/;
 const PY_TEST_FILE_RE = /^test_.*\.pyi?$|_test\.pyi?$/;
 /** Go convention: a test file is *_test.go (both `package foo` and black-box `foo_test`). */
 const GO_TEST_FILE_RE = /_test\.go$/;
+/** Java/JUnit convention: Test*.java, *Test.java, *Tests.java. */
+const JAVA_TEST_FILE_RE = /(?:^Test.*|Tests?)\.java$/;
 const TEST_DIRS = new Set(["__tests__", "test", "tests"]);
 
-/** Whether a repo-relative source path is a test file, by convention (JS + Python + Go). */
+/** Whether a repo-relative source path is a test file, by convention (JS + Python + Go + Java). */
 export function isTestFile(relPosixPath: string): boolean {
   if (!isGraphSourcePath(relPosixPath)) return false;
   const segments = relPosixPath.split("/");
   const base = segments[segments.length - 1] ?? "";
-  if (TEST_FILE_RE.test(base) || PY_TEST_FILE_RE.test(base) || GO_TEST_FILE_RE.test(base)) return true;
+  if (TEST_FILE_RE.test(base) || PY_TEST_FILE_RE.test(base) || GO_TEST_FILE_RE.test(base) || JAVA_TEST_FILE_RE.test(base)) return true;
+  // Java: any .java file under a Maven/Gradle test source root is test-side code.
+  if (base.endsWith(".java") && `/${relPosixPath}`.includes("/src/test/java/")) return true;
   return segments.slice(0, -1).some((seg) => TEST_DIRS.has(seg));
 }
 
