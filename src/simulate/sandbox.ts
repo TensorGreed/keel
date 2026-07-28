@@ -729,12 +729,43 @@ async function runGoTest(
 
 // --- Java: mvn / gradle ----------------------------------------------------
 
-/** A dependency-resolution or toolchain fault (no JDK, offline, wrapper download) — distinct from a
- *  source compile error. Checked first, so an env problem isn't mislabelled a compilation failure. */
-const JAVA_ENV_ERROR_RE = /Could not resolve dependencies|Could not (?:download|transfer|find artifact)|Cannot access .* in offline mode|Non-resolvable|JAVA_HOME|Unable to locate a Java Runtime|No compiler is provided|tools\.jar|Could not determine java version|requires Java|Could not create service|Unsupported class file major version|Could not (?:install|download) Gradle distribution|Network is unreachable/i;
+/** A build-bootstrap fault — the build never got far enough to compile the change: dependency or
+ *  plugin RESOLUTION failure, a repository it couldn't reach (403/401, unknown host, timeout, TLS),
+ *  a missing JDK, or a wrapper that couldn't fetch its distribution. Distinct from a source compile
+ *  error and checked first, so an environment problem isn't mislabelled a compilation failure. */
+const JAVA_ENV_ERROR_RE = new RegExp(
+  [
+    "Could not resolve", // Maven: "Could not resolve dependencies" OR "... plugin ..."
+    "Could not (?:download|transfer|find|GET) ",
+    "Could not (?:read|collect) dependencies",
+    "\\b(?:Plugin|Artifact|Dependency)ResolutionException\\b",
+    "Cannot access .* in offline mode",
+    "Non-resolvable",
+    "status code: 40[0-9]", // an HTTP error from the artifact repository (403 proxy/auth, 401, 404)
+    "UnknownHostException", "Unknown host",
+    "Connection (?:refused|timed out)", "Read timed out", "PKIX path", "SSLHandshakeException",
+    "JAVA_HOME", "Unable to locate a Java Runtime", "No compiler is provided", "tools\\.jar",
+    "Could not determine java version", "requires Java", "Could not create service",
+    "Unsupported class file major version",
+    "Could not (?:install|download) Gradle distribution", "Network is unreachable",
+  ].join("|"),
+  "i",
+);
 /** A source compilation failure — an executed result (the build compiled the change and it failed),
  *  surfaced as a failure carrying the compiler output, same rule as Go. */
 const JAVA_COMPILE_ERROR_RE = /COMPILATION ERROR|compileJava\w* FAILED|cannot find symbol|error: (?:cannot|incompatible|method|class )|';' expected|reached end of file/i;
+
+/**
+ * Classify a build tool's output when it failed and produced NO test report: an environment fault
+ * (dependency/plugin resolution, unreachable repository, missing JDK) or a source compile error, or
+ * null if neither signature is present. Pure — used by runJavaTest and unit-tested on recorded
+ * output so the taxonomy is pinned without a network or a build tool.
+ */
+export function classifyJavaBuildFailure(output: string): "environment-error" | "compile-error" | null {
+  if (JAVA_ENV_ERROR_RE.test(output)) return "environment-error";
+  if (JAVA_COMPILE_ERROR_RE.test(output)) return "compile-error";
+  return null;
+}
 
 /** A selected test file → its fully-qualified class name (dir under src/{test,main}/java, dotted). */
 export function javaClassName(relFile: string): string {
@@ -883,10 +914,12 @@ async function runJavaTest(
   const results = javaResults(readJavaReports(worktree, build.tool), fileForClass);
   const output = `${proc.stdout}\n${proc.stderr}`;
 
-  // No test results + a failing build: classify honestly. Env/toolchain faults first (a missing JDK
-  // or an unresolved dependency never compiled the change), then a genuine source compile error.
+  // No test results + a failing build: classify honestly. A build-bootstrap fault (missing JDK, an
+  // unresolved dependency/plugin, an unreachable repository) never compiled the change — that's an
+  // environment error, not the change's fault; a genuine source compile error IS the executed result.
   if (results.total === 0 && proc.code !== 0) {
-    if (JAVA_ENV_ERROR_RE.test(output)) {
+    const kind = classifyJavaBuildFailure(output);
+    if (kind === "environment-error") {
       return {
         status: "environment-error",
         runner: build.tool,
@@ -897,7 +930,7 @@ async function runJavaTest(
         ...cappedField,
       };
     }
-    if (JAVA_COMPILE_ERROR_RE.test(output)) {
+    if (kind === "compile-error") {
       const trace = capLines(stripAnsi(output).trim(), MAX_TRACE_LINES);
       return {
         status: "failed",

@@ -133,8 +133,14 @@ These builds are slow, so the whole build+test runs under one wall-time budget a
 is truncated honestly. A source compile error is an executed result, exactly as in Go: the build
 compiled the change and it failed, surfaced as a failure carrying the compiler output rather than a
 crash. The status taxonomy matches the other runners: no build tool at all is `runner-unavailable`
-naming what was tried; a toolchain or dependency-resolution fault (no JDK, an unresolved dependency,
-a wrapper that can't download its distribution) is an `environment-error` — not the change's fault.
+naming what was tried; a **build-bootstrap fault** — one where the build never got far enough to
+compile the change: a missing JDK, a dependency or plugin *resolution* failure, or a repository it
+couldn't reach (a 403/401, an unknown host, a timeout, a TLS error), or a wrapper that couldn't fetch
+its distribution — is an `environment-error`, not the change's fault. The classifier that draws this
+line (`classifyJavaBuildFailure`) is pure and unit-tested on recorded `mvn`/`gradle` output, so the
+taxonomy is pinned without a network; and the host-Maven executed-path tests probe the environment
+once (can it resolve + compile a fixture?) and skip with a stated reason when it can't, so an offline
+machine reads as "skipped: maven cannot reach a repository", never as a failing keel test.
 
 Design rule: the graph must always be rebuildable from a clean clone. Persistence is a
 cache, never the source of truth.

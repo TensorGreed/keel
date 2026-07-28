@@ -4,14 +4,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { preflight } from "../src/simulate/preflight.js";
-import { javaClassName, javaResults } from "../src/simulate/sandbox.js";
+import { classifyJavaBuildFailure, javaClassName, javaResults } from "../src/simulate/sandbox.js";
 import { resetGraphCache } from "../src/graph/cache.js";
 import { initGraphScanners } from "../src/graph/scanners.js";
 
-// The Java sandbox runner. The report-parsing/attribution logic is a pure function (javaResults),
-// unit-tested here against a synthetic Surefire report — no JDK required. The runner-unavailable
-// path is asserted deterministically. The executed path needs Maven + a JDK, so it skips cleanly
-// when absent.
+// The Java sandbox runner. The report-parsing/attribution logic and the build-failure classifier are
+// pure functions, unit-tested here against recorded output — no JDK, no network. The
+// runner-unavailable path is asserted deterministically. The executed path needs Maven, a JDK, AND a
+// reachable artifact repository, so it probes the environment once and skips with a stated reason
+// when the host can't build (e.g. offline) — never surfacing as a failing keel test.
 
 function hasMaven(): boolean {
   try {
@@ -37,12 +38,35 @@ function write(dir: string, rel: string, contents: string): void {
   fs.writeFileSync(path.join(dir, rel), contents);
 }
 
+// A real, buildable pom: JUnit 4 for the test, Java 8 source — so `mvn test` actually resolves,
+// compiles, and runs when the host environment can reach a repository.
+const POM = `<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>app</artifactId>
+  <version>1.0</version>
+  <properties>
+    <maven.compiler.source>8</maven.compiler.source>
+    <maven.compiler.target>8</maven.compiler.target>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencies>
+    <dependency>
+      <groupId>junit</groupId>
+      <artifactId>junit</artifactId>
+      <version>4.13.2</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+</project>
+`;
+
 /** A single-module Maven repo: Service (returns 13) + a same-package ServiceTest that asserts it. */
 function makeMavenRepo(): string {
   const d = fs.mkdtempSync(path.join(os.tmpdir(), "keel-java-"));
   git(d, ["init", "-b", "main"]);
   write(d, ".gitignore", "target/\n.keel/\n");
-  write(d, "pom.xml", "<project><groupId>com.example</groupId><artifactId>app</artifactId><version>1.0</version></project>\n");
+  write(d, "pom.xml", POM);
   write(d, "src/main/java/com/example/app/Service.java", "package com.example.app;\n\npublic class Service {\n  public int run() { return 13; }\n}\n");
   // ServiceTest is the same package as Service, referencing it WITH NO import — the adjacency case.
   write(
@@ -68,6 +92,42 @@ const BREAK = `diff --git a/src/main/java/com/example/app/Service.java b/src/mai
 `;
 
 const TEST_FILE = "src/test/java/com/example/app/ServiceTest.java";
+
+interface BuildProbe {
+  ok: boolean;
+  reason: string;
+}
+
+/**
+ * Probe ONCE whether the host can actually build a Maven project — tool present, JDK present, and an
+ * artifact repository reachable (JUnit resolves). Cached for the whole file. A host that can't build
+ * (offline, JRE-only) reads as a skip with a stated reason via classifyJavaBuildFailure, never as a
+ * failing keel test. No git needed; runs at import, and returns instantly when Maven is absent.
+ */
+function probeJavaBuild(): BuildProbe {
+  if (!MAVEN) return { ok: false, reason: "no Maven on PATH" };
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), "keel-javaprobe-"));
+  try {
+    fs.writeFileSync(path.join(d, "pom.xml"), POM);
+    write(d, "src/main/java/com/example/app/Service.java", "package com.example.app;\n\npublic class Service {\n  public int run() { return 13; }\n}\n");
+    write(d, "src/test/java/com/example/app/ServiceTest.java", "package com.example.app;\n\nimport org.junit.Test;\n\npublic class ServiceTest {\n  @Test public void t() {}\n}\n");
+    try {
+      execFileSync("mvn", ["-B", "-DskipTests", "test-compile"], { cwd: d, stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
+      return { ok: true, reason: "" };
+    } catch (e) {
+      const err = e as { stdout?: Buffer | string; stderr?: Buffer | string };
+      const output = `${err.stdout ?? ""}\n${err.stderr ?? ""}`;
+      if (classifyJavaBuildFailure(output) === "environment-error") {
+        const network = /Could not (?:resolve|transfer|download)|Unknown host|status code: 40|timed out|offline mode/i.test(output);
+        return { ok: false, reason: network ? "maven cannot reach a repository" : "the Java build environment cannot compile" };
+      }
+      return { ok: false, reason: "maven could not build the probe project" };
+    }
+  } finally {
+    fs.rmSync(d, { recursive: true, force: true });
+  }
+}
+const JAVA_BUILD = probeJavaBuild();
 
 let dir: string;
 beforeAll(async () => {
@@ -104,6 +164,36 @@ describe("java runner — pure report parsing (always)", () => {
     expect(f.file).toBe(TEST_FILE); // attributed via the junit classname → selected file
     expect(f.message).toBe("expected:<13> but was:<7>");
     expect(f.trace).toContain("ServiceTest.java:8"); // the stack, carried as trace
+  });
+
+  it("classifies a Maven dependency-resolution failure as an environment error (recorded output)", () => {
+    const mvn = `[INFO] BUILD FAILURE
+[ERROR] Failed to execute goal on project app: Could not resolve dependencies for project com.example:app:jar:1.0:
+[ERROR] Could not transfer artifact junit:junit:jar:4.13.2 from/to central (https://repo.maven.apache.org/maven2):
+[ERROR] Transfer failed for https://repo.maven.apache.org/.../junit-4.13.2.jar: Unknown host repo.maven.apache.org`;
+    expect(classifyJavaBuildFailure(mvn)).toBe("environment-error");
+  });
+
+  it("classifies a Maven plugin-resolution failure and a 403 from the repository as environment errors", () => {
+    const plugin = `[ERROR] Plugin org.apache.maven.plugins:maven-surefire-plugin:2.22.2 or one of its dependencies could not be resolved: PluginResolutionException: Cannot access central (https://repo.maven.apache.org/maven2) in offline mode`;
+    const forbidden = `[ERROR] Could not transfer artifact org.foo:bar:jar:1.0 from/to nexus (https://nexus.internal/repo): status code: 403`;
+    expect(classifyJavaBuildFailure(plugin)).toBe("environment-error");
+    expect(classifyJavaBuildFailure(forbidden)).toBe("environment-error");
+  });
+
+  it("classifies a Gradle dependency-resolution failure as an environment error (recorded output)", () => {
+    const gradle = `> Could not resolve all dependencies for configuration ':testRuntimeClasspath'.
+   > Could not download junit-4.13.2.jar (junit:junit:4.13.2)
+      > Read timed out`;
+    expect(classifyJavaBuildFailure(gradle)).toBe("environment-error");
+  });
+
+  it("classifies a source compile error as a compile error, and a plain test failure as neither", () => {
+    const compile = `[ERROR] COMPILATION ERROR :\n[ERROR] /src/main/java/com/example/app/Service.java:[4,20] cannot find symbol`;
+    expect(classifyJavaBuildFailure(compile)).toBe("compile-error");
+    // A real assertion failure is a test result, not a build fault — no environment/compile signature.
+    const testFail = `[INFO] Tests run: 1, Failures: 1\n[ERROR] testRun(com.example.app.ServiceTest): expected 13 but was 7`;
+    expect(classifyJavaBuildFailure(testFail)).toBeNull();
   });
 });
 
@@ -199,7 +289,9 @@ describe("java runner — unavailable path (always, no build tool here)", () => 
   }, 60_000);
 });
 
-describe.skipIf(!MAVEN)("java runner — executed path (host Maven)", () => {
+describe.skipIf(!JAVA_BUILD.ok)(
+  `java runner — executed path (host Maven)${JAVA_BUILD.ok ? "" : ` [skipped: ${JAVA_BUILD.reason}]`}`,
+  () => {
   it("runs the selected test class under Maven and reports the failure with a graph path", async () => {
     const pf = await preflight(dir, { diff: BREAK });
     if ("error" in pf) throw new Error(pf.error);
