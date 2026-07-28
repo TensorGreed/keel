@@ -41,7 +41,9 @@ pytest in the sandbox (reusing the repo's venv). Where pytest isn't installed, i
 (`runner-unavailable`) rather than pretending. **Go** works too — graph analysis (imports target
 packages: an edge to every non-test `.go` file, resolved via `go.mod`/`go.work`) and **execution**
 (`preflight` runs `go test -json` per package in the sandbox; a compile error surfaces as a failure
-with the compiler output). Working today:
+with the compiler output). **Java** graph analysis is in too — a package is one unit (same-package
+types couple with no import, incl. `src/test/java` ↔ `src/main/java`), resolved under Maven/Gradle
+source roots. Working today:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)

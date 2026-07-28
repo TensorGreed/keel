@@ -31,8 +31,8 @@ Edges: imports, calls, reads/writes, exposes.
 - **v2 (now):** a language-agnostic composer over a `LanguageScanner` seam
   (`src/graph/scanner.ts`). Each scanner owns a set of extensions and answers two questions
   about a file — parse (imports + symbols + exports) and resolve (specifier → in-repo file(s)).
-  TypeScript is the compiler-API scanner; **Python** and **Go** are tree-sitter scanners using
-  web-tree-sitter (WASM, so `npm install` compiles nothing; the grammars ship as assets). The
+  TypeScript is the compiler-API scanner; **Python**, **Go**, and **Java** are tree-sitter scanners
+  using web-tree-sitter (WASM, so `npm install` compiles nothing; the grammars ship as assets). The
   graph is persisted incrementally, keyed by git HEAD.
 
 **Go resolves to packages, not files — so `resolveImport` returns a set.** TS and Python both
@@ -49,8 +49,27 @@ package but imports nothing from it, so the scanner adds a synthetic edge to the
 non-test files; a black-box `pkg_test` file connects through its explicit import. Aliased and
 dot-imports pull the whole package (`*`); a blank import (`_`) is a side-effect-only edge.
 
-**Multi-language, one graph — no cross-language edges yet.** A repo's TS, Python, and Go files
-live in the same graph and coexist, but keel does not model edges *between* languages (e.g. a
+**Java's same-package coupling is invisible to imports — so a package is one unit, like Go.**
+In Java, types in the same package reference each other with *no import statement*, and the most
+common instance is a `FooTest` in `src/test/java/...` exercising `Foo` in `src/main/java/...` under
+the same package. An import-only graph would miss all of this — precisely the intra-package
+coupling a change most needs to know about. So keel models a Java package as one unit: every
+`.java` file emits a synthetic edge to every other file declaring the **same package name**, across
+*all* source roots (mutual adjacency, package-based not directory-based, so the main↔test link
+survives the split source layout). On top of that, real import edges: a single-type import
+(`import a.b.C`) resolves to the one file `C.java` (the file↔public-type convention); an on-demand
+import (`import a.b.*`) resolves to every file of that package (`*`); a static import resolves to
+its member's declaring type. Exports are the public top-level types. Resolution maps a package to a
+directory under a discovered source root — the Maven/Gradle `src/main/java` and `src/test/java`
+convention, with multi-module builds discovered from pom.xml `<modules>` and settings.gradle
+`include(...)` (extracted at the regex level; keel takes no XML or build-DSL dependency). Modelling
+same-package files as one unit is honest about what Java source expresses, rather than faking a
+file-level precision the language doesn't give at the package boundary. (Spring DI wiring between
+beans is real coupling that *isn't* an import edge either — that's a separate next pass, not
+modelled yet.)
+
+**Multi-language, one graph — no cross-language edges yet.** A repo's TS, Python, Go, and Java
+files live in the same graph and coexist, but keel does not model edges *between* languages (e.g. a
 Python service shelling out to a Node script, or an FFI boundary). That's honest: such edges
 aren't import edges and inferring them reliably is future work. Within each language the graph
 is complete; across languages, files simply sit side by side.

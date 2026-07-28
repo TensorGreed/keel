@@ -94,6 +94,20 @@ Goal: the same substrate over more languages, more sources, and more than one re
   - [x] Go test runner: select _test.go (same-package + black-box) via the dependents walk, run
         `go test -json` per package in the sandbox worktree; a compile error IS the executed
         result (surfaced as a failure); go absent → `runner-unavailable`
+- [ ] Java support: tree-sitter-java (WASM, zero-build) graph extraction + `mvn`/`gradle`
+      execution, behind the LanguageScanner seam
+  - [x] Java scanner: package declaration; single-type / on-demand (`a.b.*` → "*") / static
+        imports (member → its type); exports = public top-level types (class/interface/enum/
+        record/annotation); resolution maps package dirs under discovered source roots
+        (Maven/Gradle src/main/java, src/test/java; multi-module via pom `<modules>` +
+        settings.gradle `include(...)`, regex-level, no XML/DSL dep). CRITICAL: same-package
+        files are one unit (mutual adjacency across source roots) — types reference each other
+        with no import, so import-only edges would miss it
+  - [ ] Java test runner: select test-source-root + *Test.java/*Tests.java/Test*.java via the
+        dependents walk; prefer ./mvnw · ./gradlew over global mvn · gradle; run only the selected
+        classes; Surefire/Gradle JUnit XML via the existing parser; compile error IS the executed
+        result; no build tool → runner-unavailable; toolchain/env failure → environment-error
+  - [ ] Spring DI edges (constructor/@Autowired wiring between beans) — a separate next pass
 - [x] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
   - [x] CI connector: `keel ci` ingests JUnit reports into ci_run events (universal, no deps,

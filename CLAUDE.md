@@ -224,6 +224,19 @@ toolchain resolution (`GOTOOLCHAIN` download) is a distinct `environment-error` 
 message. Runner dispatch in `runSandbox` is
 `isPythonTest` → pytest, `isGoTest` → `go test`, else the JS runners.
 
+**Java graph analysis** is done (`graph/java-scanner.ts`, a fourth web-tree-sitter scanner behind
+the same seam). The defining quirk: same-package Java types reference each other with **no import
+statement** (a `FooTest` under `src/test/java` exercising `Foo` under `src/main/java`, same
+package), so an import-only graph would miss intra-package coupling entirely. keel models a Java
+package as one unit like a Go package: each file emits a synthetic edge to every other file with the
+same package name across all source roots (mutual adjacency, package-based so the main↔test link
+survives). Real imports on top: single-type (`import a.b.C` → `C.java`), on-demand (`import a.b.*` →
+every file of the package → `*`), and static imports (member → its declaring type). Exports are the
+public top-level types (class/interface/enum/record/annotation). Resolution maps package dirs under
+discovered source roots (Maven/Gradle `src/main/java`, `src/test/java`; multi-module via pom.xml
+`<modules>` + settings.gradle `include(...)`, extracted at the regex level — no XML/DSL dependency).
+Spring DI edges between beans are real non-import coupling, deferred to a separate next pass.
+
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`
 events — idempotent, and a re-run that flips on the same commit is a distinct observation.

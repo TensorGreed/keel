@@ -8,6 +8,7 @@ const assets = [
   ["src/events/schema.sql", "dist/events/schema.sql"],
   ["src/graph/wasm/tree-sitter-python.wasm", "dist/graph/wasm/tree-sitter-python.wasm"],
   ["src/graph/wasm/tree-sitter-go.wasm", "dist/graph/wasm/tree-sitter-go.wasm"],
+  ["src/graph/wasm/tree-sitter-java.wasm", "dist/graph/wasm/tree-sitter-java.wasm"],
 ];
 
 for (const [src, dest] of assets) {
