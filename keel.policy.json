@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "requireSimPass": true,
+  "forbidUncoveredChanges": false,
+  "requireDecisionReview": true,
+  "protectedPaths": [
+    {
+      "glob": "src/events/schema.sql",
+      "reason": "the event-log schema is a migration surface — a change here can silently corrupt existing .keel/events.db files, so it deserves explicit human review"
+    }
+  ]
+}

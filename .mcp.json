@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "keel": {
+      "command": "node ./dist/index.js",
+      "env": {
+        "KEEL_REPO": "."
+      }
+    }
+  }
+}
