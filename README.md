@@ -49,10 +49,13 @@ for TypeScript/JavaScript repos:
   covering tests, recent history, and linked decisions, plus rolled-up suggested tests and
   risk flags (uncovered / high-blast-radius / protected-path). Composition only, no LLM calls
 - `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
-  radius, the executed sim, coverage, and affected decisions against `keel.policy.json`.
-  Also runs from the shell as `keel verdict`: exit codes for CI, `--hook` to gate Claude Code
+  radius, the executed sim, coverage, affected decisions, and **architectural import rules**
+  (`forbiddenImports`: a change that introduces or retains a forbidden `from`→`to` edge blocks,
+  naming the exact edge) against `keel.policy.json`. Also runs from the shell as `keel verdict`:
+  exit codes for CI, `--hook` to gate Claude Code
   ([recipes/claude-code-hook.md](recipes/claude-code-hook.md)), and `--github-check` to post
-  the verdict as a GitHub check on every PR ([recipes/github-check.md](recipes/github-check.md))
+  the verdict as a GitHub check on every PR ([recipes/github-check.md](recipes/github-check.md)).
+  `keel report --arch` lists repo-wide rule violations so a team can adopt rules on a legacy repo
 - `get_history` — git history for any path
 
 See [docs/roadmap.md](docs/roadmap.md) for what's next (post-Phase-3: more languages,

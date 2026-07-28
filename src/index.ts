@@ -8,6 +8,7 @@
  *   keel mine      extract decision records from PR threads    — see mining/cli.ts
  *   keel decision  add/reject human decision overrides         — see mining/decision-cli.ts
  *   keel verdict   pass/warn/block a change vs keel.policy.json — see trust/verdict-cli.ts
+ *   keel report    repo-wide policy reports (--arch)          — see trust/report-cli.ts
  *
  * Subcommand modules are imported lazily so `keel init` doesn't spin up the MCP SDK,
  * SQLite, or commit ingestion.
@@ -23,6 +24,7 @@ Usage:
   keel mine      extract decision records from ingested PR threads (offline model)
   keel decision  record a human decision (add) or reject a mined one
   keel verdict   pass/warn/block a change against keel.policy.json (for CI / hooks)
+  keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel --help    show this help
   keel --version print the version
 
@@ -66,6 +68,11 @@ switch (command) {
   case "verdict": {
     const { runVerdict } = await import("./trust/verdict-cli.js");
     process.exit(await runVerdict(rest));
+    break;
+  }
+  case "report": {
+    const { runReport } = await import("./trust/report-cli.js");
+    process.exit(await runReport(rest));
     break;
   }
   case "-h":

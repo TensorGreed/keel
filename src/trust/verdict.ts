@@ -5,6 +5,7 @@
  */
 import { assembleFacts, touchedPaths, type FactsOptions, type SimFacts, type VerdictFacts } from "./facts.js";
 import { DEFAULT_POLICY, globMatch, loadPolicy, type Policy } from "./policy.js";
+import { describeViolation } from "./arch.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 export type VerdictLevel = "pass" | "warn" | "block";
@@ -72,6 +73,15 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     if (!anyHit) push("protectedPaths", "pass", "no protected paths touched");
   }
 
+  // --- architectural import rules ---
+  if (policy.forbiddenImports.length > 0) {
+    if (facts.forbiddenImports.length > 0) {
+      for (const v of facts.forbiddenImports) push("forbiddenImports", "block", describeViolation(v));
+    } else {
+      push("forbiddenImports", "pass", "no forbidden import edges introduced or retained by the change");
+    }
+  }
+
   // --- blast radius cap ---
   if (policy.maxBlastRadius !== null) {
     if (facts.blastRadius > policy.maxBlastRadius) {
@@ -131,7 +141,11 @@ export async function computeVerdict(
   const loaded = loadPolicy(repoRoot);
   if ("error" in loaded) return { error: loaded.error };
 
-  const facts = await assembleFacts(repoRoot, store, options);
+  // Hand the arch rules to fact-gathering so it computes the gating violations (needs the graph).
+  const facts = await assembleFacts(repoRoot, store, {
+    ...options,
+    ...(loaded.policy.forbiddenImports.length > 0 ? { forbiddenImports: loaded.policy.forbiddenImports } : {}),
+  });
   if ("error" in facts) return { error: facts.error };
 
   const { verdict, reasons } = evaluatePolicy(facts, loaded.policy);

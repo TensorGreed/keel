@@ -51,7 +51,8 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 
 ```
 src/
-  index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision, verdict
+  index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision,
+                    verdict, report
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
@@ -76,9 +77,10 @@ src/
                     capped, keyword-fallback like why). No generative calls.
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
                     machine-checkable facts), policy.ts (keel.policy.json, pure eval +
-                    glob), verdict.ts (pass/warn/block with audited reasons),
-                    verdict-cli.ts (`keel verdict` for CI checks + Claude Code hooks).
-                    No model calls.
+                    glob), arch.ts (forbiddenImports: forbidden from→to graph edges),
+                    verdict.ts (pass/warn/block with audited reasons), verdict-cli.ts
+                    (`keel verdict` for CI + hooks), report-cli.ts (`keel report --arch`,
+                    repo-wide import-rule violations for adoption). No model calls.
   git/              Git history + commit listing (child_process, no deps)
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook;
@@ -143,3 +145,12 @@ suggestedTests, relevantDecisions (human-first), and risks (uncovered / high-bla
 protected-path, the last two read from keel.policy.json). Pure composition of the existing
 engines; ranking uses the same local query embedding as `why` with the identical keyword
 fallback, and every truncation is stated in `notes`. No generative calls.
+
+The second Phase 4 item, architectural import rules, is also done. `keel.policy.json` gains
+`forbiddenImports: [{ from, to, reason }]` — a change that introduces or retains a graph edge
+from a `from`-glob file to a `to`-glob file blocks, the verdict naming the exact importer →
+imported edge and the reason (`src/trust/arch.ts`, evaluated against the post-change working-
+tree graph, scoped to changed files). `keel report --arch` lists every repo-wide violation
+(informational, exit 0) so a team can adopt a rule on a legacy repo before it gates anyone —
+changed-file edges gate, pre-existing edges inform. Keel dogfoods one rule itself: the MCP
+server may not import the offline mining layer (principle 1). Pure graph analysis, no model calls.

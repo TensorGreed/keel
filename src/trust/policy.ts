@@ -14,6 +14,13 @@ export interface ProtectedPath {
   reason: string;
 }
 
+/** An architectural rule: files matching `from` must not import files matching `to`. */
+export interface ForbiddenImport {
+  from: string;
+  to: string;
+  reason: string;
+}
+
 export interface Policy {
   version: number;
   /** block when the file-level blast radius exceeds this; null = no cap */
@@ -26,6 +33,8 @@ export interface Policy {
   forbidTruncatedSim: boolean;
   /** block when the diff touches a path matching one of these globs */
   protectedPaths: ProtectedPath[];
+  /** block when a changed file introduces or retains a from→to import edge */
+  forbiddenImports: ForbiddenImport[];
   /** warn when the change may be affected by recorded decisions (relevantDecisions non-empty) */
   requireDecisionReview: boolean;
 }
@@ -39,6 +48,7 @@ export const DEFAULT_POLICY: Policy = {
   forbidUncoveredChanges: false,
   forbidTruncatedSim: false,
   protectedPaths: [],
+  forbiddenImports: [],
   requireDecisionReview: false,
 };
 
@@ -96,7 +106,21 @@ export function parsePolicy(data: unknown): Policy | { error: string } {
     }
   }
 
-  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, requireDecisionReview };
+  const forbiddenImports: ForbiddenImport[] = [];
+  if (data["forbiddenImports"] !== undefined) {
+    if (!Array.isArray(data["forbiddenImports"])) return { error: '"forbiddenImports" must be an array' };
+    for (const entry of data["forbiddenImports"]) {
+      if (!isObject(entry) || typeof entry["from"] !== "string" || typeof entry["to"] !== "string" || typeof entry["reason"] !== "string") {
+        return { error: '"forbiddenImports" entries must be { from: string, to: string, reason: string }' };
+      }
+      if (entry["from"] === "" || entry["to"] === "") {
+        return { error: '"forbiddenImports" from/to globs must be non-empty' };
+      }
+      forbiddenImports.push({ from: entry["from"], to: entry["to"], reason: entry["reason"] });
+    }
+  }
+
+  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, forbiddenImports, requireDecisionReview };
 }
 
 /** Load keel.policy.json from the repo root. Missing -> defaults; malformed -> { error }. */

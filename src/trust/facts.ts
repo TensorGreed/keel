@@ -7,8 +7,11 @@
 import { getImpact, type ChangedFile } from "../simulate/impact.js";
 import { preflight } from "../simulate/preflight.js";
 import { changedRoots } from "../simulate/select-tests.js";
+import { loadGraph } from "../graph/cache.js";
 import { resolveRepoRef } from "../github/remote.js";
 import { decisionReceipt, type WhyDecision } from "../retrieval/why.js";
+import { findForbiddenEdges, gatingViolations, type ArchViolation } from "./arch.js";
+import type { ForbiddenImport } from "./policy.js";
 import type { KeelEvent } from "../events/store.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 import type { RunStatus } from "../simulate/sandbox.js";
@@ -43,12 +46,16 @@ export interface VerdictFacts {
   relevantDecisions: WhyDecision[];
   /** whether any relevant decision is human-origin (a stronger signal to review) */
   hasHumanDecision: boolean;
+  /** forbidden import edges a changed file introduces or retains (empty if no rules configured) */
+  forbiddenImports: ArchViolation[];
 }
 
 export interface FactsOptions {
   diff?: string;
   maxTests?: number;
   maxSeconds?: number;
+  /** architectural rules to check against the post-change graph (from the policy) */
+  forbiddenImports?: ForbiddenImport[];
 }
 
 /** All the paths a changed-file entry touches (new + old side of a rename). */
@@ -84,6 +91,16 @@ export async function assembleFacts(
   const repoRef = "error" in ref ? null : ref;
   const relevant = await relevantDecisions(store, impact.changedFiles, pf.impacted, repoRef);
 
+  // Architectural rules read the post-change graph (the working tree) and gate on edges whose
+  // importer the change touched — introduced or retained. Only loaded when rules are configured.
+  let forbiddenImports: ArchViolation[] = [];
+  if (options.forbiddenImports && options.forbiddenImports.length > 0) {
+    const { graph } = await loadGraph(repoRoot);
+    const all = findForbiddenEdges(graph, options.forbiddenImports);
+    const changed = new Set(impact.changedFiles.map((f) => f.path));
+    forbiddenImports = gatingViolations(all, changed);
+  }
+
   return {
     changedFiles: impact.changedFiles,
     blastRadius: pf.impacted.length,
@@ -100,6 +117,7 @@ export async function assembleFacts(
     uncoveredChanges: pf.uncoveredChanges,
     testsSelected: pf.testsSelected,
     ...relevant,
+    forbiddenImports,
   };
 }
 

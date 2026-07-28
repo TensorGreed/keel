@@ -22,6 +22,7 @@ function facts(over: Partial<VerdictFacts> = {}): VerdictFacts {
     testsSelected: ["a.test.ts"],
     relevantDecisions: [],
     hasHumanDecision: false,
+    forbiddenImports: [],
     ...over,
   };
 }
@@ -132,6 +133,24 @@ describe("evaluatePolicy", () => {
     expect(reasonFor(v, "coverage")).toMatchObject({ outcome: "warn" });
   });
 
+  it("blocks on a forbidden import edge, naming the exact edge and reason", () => {
+    const p = policy({ forbiddenImports: [{ from: "src/ui/**", to: "src/db/**", reason: "layering" }] });
+    const violation = { from: "src/ui/page.ts", to: "src/db/client.ts", rule: p.forbiddenImports[0]! };
+    const v = evaluatePolicy(facts({ forbiddenImports: [violation] }), p);
+    expect(v.verdict).toBe("block");
+    const r = reasonFor(v, "forbiddenImports")!;
+    expect(r.outcome).toBe("block");
+    expect(r.detail).toContain("src/ui/page.ts → src/db/client.ts");
+    expect(r.detail).toContain("layering");
+  });
+
+  it("passes forbiddenImports affirmatively when rules are set but no edge violates", () => {
+    const p = policy({ forbiddenImports: [{ from: "src/ui/**", to: "src/db/**", reason: "layering" }] });
+    const v = evaluatePolicy(facts({ forbiddenImports: [] }), p);
+    expect(v.verdict).toBe("pass");
+    expect(reasonFor(v, "forbiddenImports")).toMatchObject({ outcome: "pass" });
+  });
+
   it("lets a block outrank a warn", () => {
     const p = policy({ requireSimPass: true, requireDecisionReview: true });
     const decision = facts().relevantDecisions.concat({
@@ -222,4 +241,55 @@ describe("computeVerdict end-to-end", () => {
       fs.rmSync(policyFile(), { force: true });
     }
   });
+});
+
+// --- architectural import rules, end to end over a real graph --------------
+
+describe("computeVerdict forbiddenImports end-to-end", () => {
+  let dir: string;
+  const store = new SqliteEventStore(":memory:");
+
+  beforeAll(() => {
+    resetGraphCache();
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-arch-"));
+    git(dir, ["init", "-b", "main"]);
+    write(dir, ".gitignore", ".keel/\n");
+    write(dir, "package.json", JSON.stringify({ name: "arch", version: "1.0.0", type: "module" }) + "\n");
+    write(dir, "tsconfig.json", JSON.stringify({ compilerOptions: { module: "NodeNext", moduleResolution: "NodeNext", allowJs: true } }));
+    write(dir, "src/db/client.ts", "export const q = 1;\n");
+    write(dir, "src/ui/page.ts", "export const page = 1;\n"); // no db import at HEAD
+    write(
+      dir,
+      "keel.policy.json",
+      JSON.stringify({
+        version: 1,
+        requireSimPass: false,
+        forbiddenImports: [{ from: "src/ui/**", to: "src/db/**", reason: "the UI must not import the DB layer directly" }],
+      }),
+    );
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-qm", "init"]);
+  });
+  afterAll(() => {
+    store.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("blocks when a changed file introduces a forbidden edge, naming the edge", async () => {
+    resetGraphCache();
+    // Working-tree change: ui/page.ts now imports the db layer — an introduced forbidden edge.
+    fs.writeFileSync(path.join(dir, "src/ui/page.ts"), 'import { q } from "../db/client.js";\nexport const page = q;\n');
+    try {
+      const v = await computeVerdict(dir, store, {}); // working tree, no explicit diff
+      if ("error" in v) throw new Error(v.error);
+      expect(v.policy.source).toBe("file");
+      expect(v.verdict).toBe("block");
+      const r = v.reasons.find((x) => x.rule === "forbiddenImports" && x.outcome === "block");
+      expect(r, "expected a forbiddenImports block reason").toBeDefined();
+      expect(r!.detail).toContain("src/ui/page.ts → src/db/client.ts");
+      expect(v.facts.forbiddenImports).toHaveLength(1);
+    } finally {
+      fs.writeFileSync(path.join(dir, "src/ui/page.ts"), "export const page = 1;\n");
+    }
+  }, 30_000);
 });

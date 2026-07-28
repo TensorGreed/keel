@@ -8,5 +8,17 @@
       "glob": "src/events/schema.sql",
       "reason": "the event-log schema is a migration surface — a change here can silently corrupt existing .keel/events.db files, so it deserves explicit human review"
     }
+  ],
+  "forbiddenImports": [
+    {
+      "from": "src/mcp/**",
+      "to": "src/mining/**",
+      "reason": "the MCP server must never reach the offline mining layer (CLAUDE.md principle 1: no model calls server-side)"
+    },
+    {
+      "from": "src/serve.ts",
+      "to": "src/mining/**",
+      "reason": "server startup must not pull in the mining layer"
+    }
   ]
 }

@@ -58,8 +58,9 @@ tests, decisions, and risks for a change before a line is written.
 
 - [x] Context briefing tool: one call maps a task to its candidate files, blast radius, tests,
       decisions, and risks (compose get_dependencies + why + select_tests, ranked)
-- [ ] Architectural import rules in policy + verdict: forbidden `from`→`to` edges block a
+- [x] Architectural import rules in policy + verdict: forbidden `from`→`to` edges block a
       change that introduces or retains them; repo-wide violations reported for adoption
+      (`keel.policy.json` forbiddenImports, `keel report --arch`)
 - [ ] Risk hotspot report: rank files by blast radius × churn × uncovered, so review attention
       goes where a change is most likely to bite
 - [ ] Reviewer / ownership signal: who has touched the impacted files (history + CODEOWNERS),
