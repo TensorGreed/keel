@@ -38,9 +38,10 @@ Phases 0–3 complete (substrate, flight simulator, team memory, trust layer); P
 complete; Phase 5 (widen) underway — **Python** now works alongside TS/JS: graph analysis (imports,
 dependents, blast radius, test selection) and **execution** — `preflight` runs Python tests under
 pytest in the sandbox (reusing the repo's venv). Where pytest isn't installed, it says so honestly
-(`runner-unavailable`) rather than pretending. **Go** graph analysis is in too — imports target
-packages (an edge to every non-test `.go` file of the package), resolved via `go.mod`/`go.work`.
-Working today:
+(`runner-unavailable`) rather than pretending. **Go** works too — graph analysis (imports target
+packages: an edge to every non-test `.go` file, resolved via `go.mod`/`go.work`) and **execution**
+(`preflight` runs `go test -json` per package in the sandbox; a compile error surfaces as a failure
+with the compiler output). Working today:
 
 - `get_dependencies` — import graph with transitive blast radius and symbol-level usage
 - `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)

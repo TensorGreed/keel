@@ -55,11 +55,17 @@ Python service shelling out to a Node script, or an FFI boundary). That's honest
 aren't import edges and inferring them reliably is future work. Within each language the graph
 is complete; across languages, files simply sit side by side.
 
-**Execution now covers TS/JS and Python.** Graph analysis, impact, and test selection are
-language-agnostic (`test_*.py` / `*_test.py` / `tests/` selection for Python). The sandbox
-runner picks the runner from the selected tests: **pytest** for Python, else vitest / jest /
-node. A change's covering tests are one language (there are no cross-language edges), so the
-selection is homogeneous. The pytest run reuses the repo's virtualenv when present (`.venv/bin/
+**Execution now covers TS/JS, Python, and Go.** Graph analysis, impact, and test selection are
+language-agnostic (`test_*.py` / `*_test.py` / `tests/` for Python; `*_test.go` for Go). The
+sandbox runner picks the runner from the selected tests: **pytest** for Python, **`go test`** for
+Go, else vitest / jest / node. A change's covering tests are one language (there are no
+cross-language edges), so the selection is homogeneous. Go tests run per *package*, not per file:
+the selected `_test.go` files map to their package dirs and run in one `go test -json -run .
+<pkgs>` pass in the worktree, and the `-json` event stream is parsed into the same normalized
+pass/fail records (attributed back to a selected test file per package, so a failure keeps its
+graph path to the change). The go toolchain builds before it tests, so a **compile error is the
+executed result** — surfaced as a failure carrying the compiler output, never a runner crash;
+`go` absent is a `runner-unavailable` status naming what was tried. The pytest run reuses the repo's virtualenv when present (`.venv/bin/
 python` or `$VIRTUAL_ENV` — the Python analog of the node_modules symlink), puts the worktree's
 module roots on `PYTHONPATH` so the change under test is what runs, and parses the JUnit report
 with the same parser `keel ci` uses. It runs with `--continue-on-collection-errors` so one

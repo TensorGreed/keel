@@ -9,8 +9,9 @@
  * cap, and the worktree is torn down. The main working tree is never touched.
  *
  * Runner is auto-detected from the selected tests: Python tests run under pytest (JUnit-reported,
- * reusing the ci/junit parser); otherwise, from package.json, vitest or jest (JSON-reported, so
- * failures are structured), else Node's built-in `node --test`. No LLM, no network.
+ * reusing the ci/junit parser); Go tests under `go test -json` (per package); otherwise, from
+ * package.json, vitest or jest (JSON-reported, so failures are structured), else Node's built-in
+ * `node --test`. No LLM, no network.
  */
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
@@ -28,7 +29,7 @@ const DEFAULT_MAX_TESTS = 50;
 const MAX_CAPTURE_BYTES = 512 * 1024; // cap captured output so a chatty run can't OOM us
 const OUTPUT_TAIL = 8_000;
 
-export type Runner = "vitest" | "jest" | "node" | "pytest";
+export type Runner = "vitest" | "jest" | "node" | "pytest" | "go";
 
 export type RunStatus =
   | "passed"
@@ -145,6 +146,10 @@ function detectRunner(worktree: string): "vitest" | "jest" | "node" {
 
 function isPythonTest(file: string): boolean {
   return file.endsWith(".py") || file.endsWith(".pyi");
+}
+
+function isGoTest(file: string): boolean {
+  return file.endsWith("_test.go");
 }
 
 function isFile(p: string): boolean {
@@ -457,6 +462,144 @@ async function runPytest(
   };
 }
 
+interface GoEvent {
+  Action?: string;
+  Package?: string;
+  Test?: string;
+  Output?: string;
+}
+
+/** The concrete failure line from a Go test's captured output — the `file.go:line: message`
+ *  assertion or panic — skipping go test's `=== RUN` / `--- FAIL` framing. */
+function goFailureMessage(output: string): string {
+  const line = output
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith("=== ") && !l.startsWith("--- ") && l !== "PASS" && l !== "FAIL");
+  return line ?? "(test failed)";
+}
+
+/**
+ * Run the selected Go tests in the worktree. Go tests run per PACKAGE, not per file, so the
+ * selected `_test.go` files are mapped to their package dirs and run in one `go test -json` pass;
+ * each package's results are attributed back to one of its selected test files, keeping the graph
+ * path to the change. The go toolchain builds the package before testing, so a compile error IS
+ * the executed result — it surfaces as a failure carrying the compiler output, never a runner
+ * crash. go absent is a clean "runner-unavailable" naming what was tried. Result sans durationMs.
+ */
+async function runGoTest(
+  worktree: string,
+  ranTests: string[],
+  timeoutMs: number,
+  capped: { requested: number; ran: number } | undefined,
+): Promise<Omit<SandboxResult, "durationMs">> {
+  const cappedField = capped ? { capped } : {};
+
+  // Is the go toolchain available? Check first, so a missing runner is a clean status rather than a
+  // confusing spawn error.
+  const check = await runProcess("go", ["version"], { cwd: worktree, timeoutMs: 30_000 });
+  if (check.spawnError || check.code !== 0) {
+    return {
+      status: "runner-unavailable",
+      runner: "go",
+      ranTests,
+      error: `the go toolchain is not available${check.spawnError ? `: ${check.spawnError}` : ""} — install Go to execute \`go test\``,
+      ...cappedField,
+    };
+  }
+
+  // Map selected _test.go files to their package dirs (Go runs tests per package). Remember one
+  // test file per package basename so a failure can be attributed back to a file in the change.
+  const pkgArgs = new Set<string>();
+  const testFileForBasename = new Map<string, string>();
+  for (const t of ranTests) {
+    const dir = path.posix.dirname(t);
+    pkgArgs.add(dir === "." ? "." : `./${dir}`);
+    const base = dir === "." ? "." : path.posix.basename(dir);
+    if (!testFileForBasename.has(base)) testFileForBasename.set(base, t);
+  }
+  // A -json event names its package by import path; its last segment is the package dir's basename.
+  const attributeFile = (pkgImportPath: string | undefined): string | undefined =>
+    testFileForBasename.get((pkgImportPath ?? "").split("/").pop() ?? "") ?? ranTests[0];
+
+  const proc = await runProcess("go", ["test", "-json", "-run", ".", ...pkgArgs], { cwd: worktree, timeoutMs });
+  const combined = tail(stripAnsi(`${proc.stdout}\n${proc.stderr}`));
+  if (proc.timedOut) {
+    return { status: "timed-out", runner: "go", ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+  if (proc.spawnError) {
+    return { status: "error", runner: "go", ranTests, error: proc.spawnError, ...(combined ? { output: combined } : {}), ...cappedField };
+  }
+
+  // Parse the -json event stream. A test-level pass/fail carries a Test field; a package that fails
+  // to compile emits output lines then a package-level fail (no Test) — that's the build error.
+  let passed = 0;
+  const failingTests: { pkg: string; test: string }[] = [];
+  const failedPackages = new Set<string>();
+  const testOutput = new Map<string, string>();
+  const pkgOutput = new Map<string, string>();
+  const key = (pkg: string | undefined, test: string): string => `${pkg ?? ""} ${test}`;
+
+  for (const line of proc.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    let ev: GoEvent;
+    try {
+      ev = JSON.parse(trimmed) as GoEvent;
+    } catch {
+      continue; // non-JSON noise (already in the output tail)
+    }
+    if (ev.Action === "output" && ev.Output) {
+      const map = ev.Test ? testOutput : pkgOutput;
+      const k = ev.Test ? key(ev.Package, ev.Test) : ev.Package ?? "";
+      map.set(k, (map.get(k) ?? "") + ev.Output);
+    } else if (ev.Action === "pass" && ev.Test) {
+      passed++;
+    } else if (ev.Action === "fail" && ev.Test) {
+      failingTests.push({ pkg: ev.Package ?? "", test: ev.Test });
+    } else if (ev.Action === "fail" && !ev.Test && ev.Package) {
+      failedPackages.add(ev.Package);
+    }
+  }
+
+  const failures: TestFailure[] = [];
+  const failedTestPackages = new Set<string>();
+  for (const { pkg, test } of failingTests) {
+    failedTestPackages.add(pkg);
+    const out = capLines(stripAnsi((testOutput.get(key(pkg, test)) ?? "").trim()), MAX_TRACE_LINES);
+    const message = goFailureMessage(out);
+    const file = attributeFile(pkg);
+    failures.push({ name: test, ...(file ? { file } : {}), message, ...(out && out !== message ? { trace: out } : {}) });
+  }
+  // A package that failed with no failing test is a build/compile failure (or a package-level panic
+  // before any test ran) — the go build executed, so surface it as a failure with the compiler
+  // output rather than hiding it as a crash.
+  for (const pkg of failedPackages) {
+    if (failedTestPackages.has(pkg)) continue;
+    const out = capLines(stripAnsi((pkgOutput.get(pkg) ?? "").trim()), MAX_TRACE_LINES);
+    const file = attributeFile(pkg);
+    failures.push({ name: `${pkg} (build failed)`, ...(file ? { file } : {}), message: goFailureMessage(out) || "build failed", ...(out ? { trace: out } : {}) });
+  }
+
+  const failed = failures.length;
+  const total = passed + failed;
+  const status: RunStatus = total > 0 ? (failed > 0 ? "failed" : "passed") : proc.code === 0 ? "no-tests" : "failed";
+  const runFailedNoResults = status === "failed" && total === 0;
+
+  return {
+    status,
+    runner: "go",
+    ranTests,
+    exitCode: proc.code,
+    ...(runFailedNoResults ? { error: `the go test run failed (exit ${proc.code ?? "?"}) without reporting a test or build error — see output` } : {}),
+    passed,
+    failed,
+    failures,
+    ...(combined ? { output: combined } : {}),
+    ...cappedField,
+  };
+}
+
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -510,9 +653,12 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     if (applyError) return done({ status: "apply-failed", runner: null, ranTests, error: applyError, ...(capped ? { capped } : {}) });
 
     // A change's covering tests are one language (no cross-language edges), so a Python selection
-    // runs under pytest; anything else under the JS runners.
+    // runs under pytest, a Go selection under `go test`; anything else under the JS runners.
     if (ranTests.every(isPythonTest)) {
       return done(await runPytest(repoRoot, worktree, parent, ranTests, timeoutMs, capped));
+    }
+    if (ranTests.every(isGoTest)) {
+      return done(await runGoTest(worktree, ranTests, timeoutMs, capped));
     }
 
     const runner = detectRunner(worktree);

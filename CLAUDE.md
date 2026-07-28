@@ -209,7 +209,13 @@ capitalized top-level funcs/types/vars/consts with methods attributed to their r
 resolution maps import paths to dirs via each `go.mod`'s module path (`go.work` workspaces =
 several discovered modules), excluding `vendor/`/`testdata/` (`internal/` needs no special case).
 A same-package `_test.go` file gets a synthetic edge to its package's non-test files; a black-box
-`pkg_test` file connects through its explicit import — so a change to a package selects both.
+`pkg_test` file connects through its explicit import — so a change to a package selects both. **Go
+execution** is done too (`simulate/sandbox.ts`): the selected `_test.go` files map to their package
+dirs and run in one `go test -json -run . <pkgs>` pass in the worktree, the `-json` stream parsed
+into normalized pass/fail (attributed to a test file per package for the graph path). go builds
+before it tests, so a compile error IS the executed result — a failure with the compiler output,
+not a crash; `go` absent is a `runner-unavailable` status. Runner dispatch in `runSandbox` is
+`isPythonTest` → pytest, `isGoTest` → `go test`, else the JS runners.
 
 Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
 ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`
