@@ -81,8 +81,12 @@ Goal: the same substrate over more languages, more sources, and more than one re
   - [x] Multi-language cache + mixed TS+Python repos (one graph, no cross-language edges yet);
         get_dependencies/get_impact/select_tests work on Python; sim runner stays TS/JS-only
         (preflight returns `runner-unsupported` for Python rather than pretending)
-- [ ] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
+- [x] CI connector + flaky-test detection: ingest CI runs, flag tests that fail
       non-deterministically so the sim can discount them
+  - [x] CI connector: `keel ci` ingests JUnit reports into ci_run events (universal, no deps,
+        idempotent; a flipped re-run on one commit is a distinct observation)
+  - [x] Flaky detection: a test that both passed and failed on the same commit (`flaky_tests`
+        tool); the verdict discounts a flaky-only sim failure to a warn instead of blocking
 - [ ] ADR ingestion into the decision index: Markdown ADRs as first-class decision records
 - [ ] Cross-repo workspaces: one graph spanning multiple repos/services
 

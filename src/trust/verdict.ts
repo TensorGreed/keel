@@ -26,8 +26,8 @@ export interface Verdict {
 
 const HARD_ERROR_STATUS: Record<string, true> = { "apply-failed": true, "timed-out": true, error: true };
 
-function failureList(sim: SimFacts): string {
-  return sim.failures
+function failureList(failures: SimFacts["failures"]): string {
+  return failures
     .slice(0, 5)
     .map((f) => (f.file ? `${f.test} (${f.file})` : f.test))
     .join(", ");
@@ -46,13 +46,22 @@ export function evaluatePolicy(facts: VerdictFacts, policy: Policy): { verdict: 
     // The sim couldn't produce a result — can't affirm safety, so block.
     push("sim", "block", `the sim could not run (${sim.status})${sim.error ? `: ${sim.error}` : ""}`);
   } else if (sim.status === "failed") {
-    // vitest/jest report per-test failures; node:test only reports a non-zero run.
-    const detail =
-      sim.failures.length > 0
-        ? `${sim.failed ?? sim.failures.length} test(s) failed: ${failureList(sim)}`
-        : "the test run failed (non-zero exit; the runner reported no per-test detail)";
-    if (policy.requireSimPass) push("requireSimPass", "block", detail);
-    else push("sim", "warn", `${detail} (requireSimPass is off)`);
+    // CI-proven flaky failures (same test both passed and failed on one commit) are discounted:
+    // they aren't evidence of a regression, so a run whose only failures are flaky doesn't block.
+    const real = sim.failures.filter((f) => !f.flaky);
+    const flaky = sim.failures.filter((f) => f.flaky);
+    if (sim.failures.length > 0 && real.length === 0) {
+      push("sim", "warn", `${flaky.length} test(s) failed, but all are known-flaky in CI (passed and failed on the same commit) — discounted; re-run to confirm`);
+    } else {
+      // vitest/jest report per-test failures; node:test only reports a non-zero run.
+      const base =
+        real.length > 0
+          ? `${real.length} test(s) failed: ${failureList(real)}`
+          : "the test run failed (non-zero exit; the runner reported no per-test detail)";
+      const flakyNote = flaky.length > 0 ? ` (${flaky.length} known-flaky failure(s) discounted)` : "";
+      if (policy.requireSimPass) push("requireSimPass", "block", base + flakyNote);
+      else push("sim", "warn", `${base}${flakyNote} (requireSimPass is off)`);
+    }
   } else if (sim.status === "passed") {
     push(policy.requireSimPass ? "requireSimPass" : "sim", "pass", `all ${sim.passed ?? 0} selected test(s) passed`);
   } else if (sim.status === "runner-unsupported") {

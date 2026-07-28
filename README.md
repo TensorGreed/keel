@@ -54,6 +54,9 @@ today:
   only, no LLM calls
 - `suggest_reviewers` — who should review a change, ranked by recency-weighted authorship of the
   files it touches (from commit + PR history), excluding bots and the change's own author
+- `flaky_tests` — tests CI has proven non-deterministic (passed and failed on the *same* commit),
+  from JUnit reports ingested by `keel ci`; the verdict discounts a flaky-only sim failure to a
+  warn instead of blocking on it
 - `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
   radius, the executed sim, coverage, affected decisions, and **architectural import rules**
   (`forbiddenImports`: a change that introduces or retains a forbidden `from`→`to` edge blocks,

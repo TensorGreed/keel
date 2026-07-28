@@ -12,6 +12,7 @@ import { resolveRepoRef } from "../github/remote.js";
 import { decisionReceipt, type WhyDecision } from "../retrieval/why.js";
 import { findForbiddenEdges, gatingViolations, type ArchViolation } from "./arch.js";
 import { authorShares } from "../ownership/ownership.js";
+import { detectFlakyTests, flakyMatcher } from "../ci/flaky.js";
 import type { ForbiddenImport } from "./policy.js";
 import type { KeelEvent } from "../events/store.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
@@ -21,7 +22,8 @@ export interface SimFacts {
   status: RunStatus;
   passed?: number;
   failed?: number;
-  failures: { test: string; file?: string; message: string; graphPath?: string[] }[];
+  /** flaky: true means CI has seen this exact test both pass and fail on one commit (discounted) */
+  failures: { test: string; file?: string; message: string; graphPath?: string[]; flaky?: boolean }[];
   /** set on apply-failed / timed-out / error — the reason the sim couldn't produce a verdict */
   error?: string;
   budget: { maxTests: number; maxSeconds: number; testsSkipped: string[]; truncated: boolean };
@@ -52,6 +54,9 @@ export interface VerdictFacts {
   /** changed files whose top author isn't the committer (only when warnOnForeignCode is on) */
   foreignChanges: { file: string; topAuthor: string; share: number }[];
 }
+
+/** Recent ci_run events scanned for the flaky signal — bounded so a busy repo stays fast. */
+const FLAKY_RUN_WINDOW = 300;
 
 export interface FactsOptions {
   diff?: string;
@@ -100,6 +105,14 @@ export async function assembleFacts(
   const repoRef = "error" in ref ? null : ref;
   const relevant = await relevantDecisions(store, impact.changedFiles, pf.impacted, repoRef);
 
+  // Discount failures CI has proven flaky (same test, same commit, both passed and failed). Only
+  // when there's a failure to explain — otherwise there's nothing to look up.
+  const failures: SimFacts["failures"] = pf.executed.failures;
+  if (failures.length > 0) {
+    const match = flakyMatcher(detectFlakyTests(await store.byKind("ci_run", FLAKY_RUN_WINDOW)));
+    for (const f of failures) if (match.isFlaky(f.test, f.file)) f.flaky = true;
+  }
+
   // Architectural rules read the post-change graph (the working tree) and gate on edges whose
   // importer the change touched — introduced or retained. Only loaded when rules are configured.
   let forbiddenImports: ArchViolation[] = [];
@@ -132,7 +145,7 @@ export async function assembleFacts(
       status: pf.executed.status,
       ...(pf.executed.passed !== undefined ? { passed: pf.executed.passed } : {}),
       ...(pf.executed.failed !== undefined ? { failed: pf.executed.failed } : {}),
-      failures: pf.executed.failures,
+      failures,
       ...(pf.executed.error ? { error: pf.executed.error } : {}),
       budget: pf.budget,
     },

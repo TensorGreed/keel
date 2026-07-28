@@ -20,6 +20,7 @@ import { buildContext } from "../context/briefing.js";
 import { computeHotspots, coveredFiles } from "../trust/hotspots.js";
 import { loadPolicy, DEFAULT_POLICY } from "../trust/policy.js";
 import { authorShares, resolveCommitter, suggestReviewers } from "../ownership/ownership.js";
+import { detectFlakyTests } from "../ci/flaky.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -37,6 +38,7 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
     registerVerdict(server, repoRoot, store);
     registerContext(server, repoRoot, store);
     registerSuggestReviewers(server, repoRoot, store);
+    registerFlakyTests(server, store);
   }
 
   server.tool(
@@ -314,6 +316,35 @@ function registerSuggestReviewers(server: McpServer, repoRoot: string, store: Sq
         return json({ reviewers, filesConsidered: files.length, excluded: [...exclude], notes });
       } catch (err) {
         return json({ error: `suggest_reviewers failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** List tests CI has proven flaky (passed and failed on the same commit), with evidence. */
+function registerFlakyTests(server: McpServer, store: SqliteEventStore): void {
+  server.tool(
+    "flaky_tests",
+    "List tests known to be flaky from ingested CI runs: tests that both passed AND failed on the " +
+      "same commit (non-deterministic) — the one signal that can't be a real regression or fix. " +
+      "Each entry names the test, its file, how many commits it flipped on, and pass/fail counts. " +
+      "The verdict uses this to discount a flaky failure instead of blocking on it. Deterministic " +
+      "aggregation over the event log, no model calls. Populate it with `keel ci <junit.xml>`.",
+    {},
+    async () => {
+      try {
+        const runs = await store.byKind("ci_run", 300);
+        const flaky = detectFlakyTests(runs);
+        const notes: string[] = [];
+        if (runs.length === 0) notes.push("No CI runs ingested yet — run `keel ci <junit-report.xml>` after your test job.");
+        else if (flaky.length === 0) {
+          notes.push(
+            `Analyzed ${runs.length} CI run(s); no flaky tests found. Detection needs the same commit run more than once (retries, matrix, re-runs) to observe a flip.`,
+          );
+        }
+        return json({ flaky, runsAnalyzed: runs.length, notes });
+      } catch (err) {
+        return json({ error: `flaky_tests failed: ${(err as Error).message}` });
       }
     },
   );

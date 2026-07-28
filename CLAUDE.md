@@ -191,3 +191,13 @@ layouts, namespace packages), and exports (def/class/assign, `__all__`) are supp
 coexist; that's honest, see docs/architecture.md). `get_dependencies`/`get_impact`/`select_tests`
 work on Python (`test_*.py`/`*_test.py`/`tests/` selection); the sandbox sim runner stays TS/JS-only,
 so `preflight` returns a `runner-unsupported` status and `verdict` warns rather than pretending.
+
+Phase 5 item 2, the **CI connector + flaky-test detection**, is done (`src/ci/`). `keel ci`
+ingests JUnit test reports (the universal CI format; a dependency-free parser) into `ci_run`
+events — idempotent, and a re-run that flips on the same commit is a distinct observation.
+`ci/flaky.ts` detects flaky tests deterministically: a test that both **passed and failed on the
+same commit** (cross-commit disagreement is ordinary history, not flakiness, and is deliberately
+not flagged). The `flaky_tests` MCP tool lists them with evidence; the trust layer discounts a
+flaky failure — a `verdict` whose only sim failures are known-flaky warns instead of blocking
+(`facts.ts` annotates each failure via the flaky matcher). No model calls; graph/sim value still
+works with zero CI data (flaky detection just returns empty and nothing is discounted).

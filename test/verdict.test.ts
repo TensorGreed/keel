@@ -64,6 +64,30 @@ describe("evaluatePolicy", () => {
     expect(reasonFor(v, "sim")).toMatchObject({ outcome: "warn" });
   });
 
+  it("discounts a run whose only failures are known-flaky (warn, not block)", () => {
+    const sim = { ...failedSim(), failures: [{ test: "flaps", file: "f.test.ts", message: "x", flaky: true }] };
+    const v = evaluatePolicy(facts({ sim }), policy({ requireSimPass: true }));
+    expect(v.verdict).toBe("warn");
+    expect(reasonFor(v, "sim")!.outcome).toBe("warn");
+    expect(reasonFor(v, "sim")!.detail).toMatch(/known-flaky/);
+  });
+
+  it("still blocks on a real failure, noting the flaky ones were discounted", () => {
+    const sim = {
+      ...failedSim(),
+      failures: [
+        { test: "real", file: "r.test.ts", message: "x" },
+        { test: "flaps", file: "f.test.ts", message: "y", flaky: true },
+      ],
+    };
+    const v = evaluatePolicy(facts({ sim }), policy({ requireSimPass: true }));
+    expect(v.verdict).toBe("block");
+    const r = reasonFor(v, "requireSimPass")!;
+    expect(r.outcome).toBe("block");
+    expect(r.detail).toContain("real");
+    expect(r.detail).toMatch(/1 known-flaky failure\(s\) discounted/);
+  });
+
   it("blocks with the status when the sim could not run, regardless of requireSimPass", () => {
     const sim = { ...facts().sim, status: "apply-failed" as const, error: "git apply failed: patch does not apply" };
     const v = evaluatePolicy(facts({ sim }), policy({ requireSimPass: false }));
