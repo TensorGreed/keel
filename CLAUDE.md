@@ -33,7 +33,8 @@ are currently building.
 - **Language under analysis:** TypeScript/JavaScript (the dominant full-stack set).
   The graph builder starts with the TS compiler API; migrate hot paths to tree-sitter
   when we add more languages.
-- **Runtime:** Node >= 22, ESM only, TypeScript strict.
+- **Runtime:** Node >= 22.13 (node:sqlite is unflagged there; no --experimental-sqlite),
+  ESM only, TypeScript strict.
 - **Protocol:** MCP over stdio via `@modelcontextprotocol/sdk`.
 
 ## Commands

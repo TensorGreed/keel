@@ -29,8 +29,7 @@ jobs:
       - run: npm ci
       - run: npm run build
 
-      # node:sqlite needs --experimental-sqlite on Node 22 (required) and accepts it as a
-      # no-op on Node 24, so one setting covers the matrix.
+      # node:sqlite is available without a flag since Node 22.13 / 23.4 (see engines: >=22.13).
+      # We deliberately do NOT pass --experimental-sqlite: it's unnecessary now and would abort
+      # node ("bad option") on any version that has since dropped the flag.
       - run: npm test
-        env:
-          NODE_OPTIONS: --experimental-sqlite
