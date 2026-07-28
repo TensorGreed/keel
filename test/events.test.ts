@@ -62,7 +62,9 @@ describe("SqliteEventStore commit ingestion", () => {
     const newest = commits[0]!;
     expect(newest.externalId).toMatch(/^[0-9a-f]{40}$/);
     expect(newest.actor).toBe("Dev");
-    expect(newest.occurredAt).toBe("2021-01-03T00:00:00+00:00"); // git %aI renders Z as +00:00
+    // Assert the instant, not git's formatting: %aI renders a UTC offset as "+00:00" on older
+    // git and "Z" on newer git, so compare parsed values rather than the exact string.
+    expect(new Date(newest.occurredAt).toISOString()).toBe("2021-01-03T00:00:00.000Z");
     expect(newest.files).toEqual(["src/c.ts"]);
     expect(newest.payload["email"]).toBe("dev@example.com");
     store.close();
