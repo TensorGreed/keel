@@ -62,8 +62,8 @@ for TypeScript/JavaScript repos:
   legacy repo), `--hotspots` ranks files by risk = churn × blast radius × coverage gap
 - `get_history` — git history for any path
 
-See [docs/roadmap.md](docs/roadmap.md) for what's next (post-Phase-3: more languages,
-cross-repo graphs, CI/Jira/incident connectors).
+See [docs/roadmap.md](docs/roadmap.md) for what's next (Phase 5 — widen: Python via
+tree-sitter, a CI connector + flaky-test detection, ADR ingestion, cross-repo workspaces).
 
 ## Quick start
 
@@ -91,6 +91,35 @@ node dist/index.js init --command "node ./dist/index.js"   # point a repo at thi
 
 This repo dogfoods itself: its own `.mcp.json`, `keel.policy.json`, and a `verdict` Stop hook
 (`.claude/settings.json`) gate every change to Keel with Keel.
+
+## Releasing
+
+Releases publish to npm from CI via **npm trusted publishing** (OIDC) — no npm token is ever
+stored as a secret. [`.github/workflows/release.yml`](.github/workflows/release.yml) fires on a
+`v*` tag: it installs, builds, runs the full test suite, then `npm publish --provenance` (the
+provenance attestation is signed with GitHub's OIDC identity).
+
+**One-time setup** (a maintainer, once):
+
+1. **Create the package.** Trusted publishing is configured on an existing package, so publish
+   the first version manually from a maintainer's machine: `npm publish --access public` (this
+   is the manual `0.1.0` step). Every release after this is automated.
+2. **Register the trusted publisher** on [npmjs.com](https://www.npmjs.com): open the
+   `@tensorgreed/keel` package → **Settings → Trusted Publishing → Add GitHub Actions** and set
+   - Organization / repository: `TensorGreed/keel`
+   - Workflow filename: `release.yml`
+
+   No secret is added to the GitHub repo — the `id-token: write` permission in the workflow is all
+   that's needed.
+
+**To cut a release:** bump `version` in `package.json`, commit, then tag and push:
+
+```bash
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+CI takes it from there. (`prepublishOnly` re-runs build + tests as a final guard before publish.)
 
 ## Principles
 
