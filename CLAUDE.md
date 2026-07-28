@@ -70,6 +70,8 @@ src/
   github/           `keel ingest`: backfill PRs + review threads into the event log
                     (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps);
                     check.ts publishes a verdict as a GitHub check run (verdict --github-check)
+  ci/               `keel ci`: ingest JUnit test reports into ci_run events (junit.ts parser,
+                    ingest.ts ETL, cli.ts — no deps). Feeds flaky-test detection. No model calls.
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
                     The one place model calls are allowed — Ollama or batch Haiku,
                     injectable DecisionModel; never reached from the MCP server

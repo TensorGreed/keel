@@ -7,6 +7,7 @@
  *   keel ingest    backfill GitHub PRs into the event log      — see github/cli.ts
  *   keel mine      extract decision records from PR threads    — see mining/cli.ts
  *   keel decision  add/reject human decision overrides         — see mining/decision-cli.ts
+ *   keel ci        ingest JUnit CI reports into the event log   — see ci/cli.ts
  *   keel verdict   pass/warn/block a change vs keel.policy.json — see trust/verdict-cli.ts
  *   keel report    repo-wide policy reports (--arch)          — see trust/report-cli.ts
  *
@@ -23,6 +24,7 @@ Usage:
   keel ingest    backfill GitHub PRs + review threads into the event log
   keel mine      extract decision records from ingested PR threads (offline model)
   keel decision  record a human decision (add) or reject a mined one
+  keel ci        ingest JUnit test reports from a CI run (for flaky-test detection)
   keel verdict   pass/warn/block a change against keel.policy.json (for CI / hooks)
   keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel --help    show this help
@@ -63,6 +65,11 @@ switch (command) {
   case "decision": {
     const { runDecision } = await import("./mining/decision-cli.js");
     process.exit(await runDecision(rest));
+    break;
+  }
+  case "ci": {
+    const { runCi } = await import("./ci/cli.js");
+    process.exit(await runCi(rest));
     break;
   }
   case "verdict": {
