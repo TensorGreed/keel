@@ -3,7 +3,7 @@
  * a decision (add), which always outranks mined records, or reject a mined one (kept in the
  * log for audit, excluded from `why`). Offline CLI; lazy-loaded from index.ts.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSyncTimed } from "../util/timeouts.js";
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
 import type { KeelEvent } from "../events/store.js";
@@ -63,7 +63,7 @@ export function addHumanDecision(store: SqliteEventStore, opts: AddOptions): str
 
 function gitUserName(repoRoot: string): string | undefined {
   try {
-    return execFileSync("git", ["config", "user.name"], { cwd: repoRoot }).toString().trim() || undefined;
+    return execFileSyncTimed("git", ["config", "user.name"], { cwd: repoRoot }).trim() || undefined;
   } catch {
     return undefined;
   }

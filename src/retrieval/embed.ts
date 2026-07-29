@@ -5,6 +5,7 @@
  */
 import type { EventKind, KeelEvent } from "../events/store.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
+import { fetchTimed, ollamaEmbedTimeoutMs } from "../util/timeouts.js";
 
 export interface EmbeddingModel {
   /** Embed a batch of texts into unit-comparable vectors. Throws EmbeddingError on failure. */
@@ -30,8 +31,9 @@ export class OllamaEmbeddingModel implements EmbeddingModel {
   constructor(
     private readonly model: string = DEFAULT_EMBED_MODEL,
     private readonly baseUrl: string = DEFAULT_OLLAMA_URL,
-    /** query-time cap so an unreachable/slow Ollama can't hang the MCP server (see why.ts) */
-    private readonly timeoutMs?: number,
+    /** cap so an unreachable/slow Ollama can't hang the caller (query-time: see why.ts; offline
+     *  mining: see mining/decision-cli.ts) — defaults to KEEL_OLLAMA_EMBED_TIMEOUT / 20s. */
+    private readonly timeoutMs: number = ollamaEmbedTimeoutMs(),
   ) {
     this.name = `ollama:${model}`;
   }
@@ -40,14 +42,22 @@ export class OllamaEmbeddingModel implements EmbeddingModel {
     if (texts.length === 0) return [];
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl.replace(/\/$/, "")}/api/embed`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: this.model, input: texts }),
-        ...(this.timeoutMs !== undefined ? { signal: AbortSignal.timeout(this.timeoutMs) } : {}),
-      });
+      res = await fetchTimed(
+        `${this.baseUrl.replace(/\/$/, "")}/api/embed`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: this.model, input: texts }),
+        },
+        this.timeoutMs,
+        `Ollama embed (${this.model})`,
+      );
     } catch (err) {
-      throw new EmbeddingError(`cannot reach Ollama at ${this.baseUrl}: ${(err as Error).message}`);
+      const e = err as Error;
+      if (e.name === "TimeoutError" || e.name === "AbortError") {
+        throw new EmbeddingError(`Ollama at ${this.baseUrl} timed out after ${Math.round(this.timeoutMs / 1000)}s (raise KEEL_OLLAMA_EMBED_TIMEOUT to allow longer)`);
+      }
+      throw new EmbeddingError(`cannot reach Ollama at ${this.baseUrl}: ${e.message}`);
     }
     if (!res.ok) {
       throw new EmbeddingError(`Ollama ${res.status}: ${(await res.text()).slice(0, 200)}`);

@@ -14,17 +14,13 @@
  * `node --test`. No LLM, no network.
  */
 import { spawn } from "node:child_process";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { promisify } from "node:util";
 import { parseJUnit } from "../ci/junit.js";
 import { pythonModuleRoots } from "../graph/python-scanner.js";
+import { execFileTimed, PROGRESS_THRESHOLD_MS, runnerTimeoutMs } from "../util/timeouts.js";
 
-const execFileAsync = promisify(execFile);
-
-const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_TESTS = 50;
 const MAX_CAPTURE_BYTES = 512 * 1024; // cap captured output so a chatty run can't OOM us
 const OUTPUT_TAIL = 8_000;
@@ -102,22 +98,30 @@ function runProcess(
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let settled = false;
     const capture = (chunk: Buffer, sink: "out" | "err"): void => {
       if (sink === "out" && stdout.length < MAX_CAPTURE_BYTES) stdout += chunk.toString();
       else if (sink === "err" && stderr.length < MAX_CAPTURE_BYTES) stderr += chunk.toString();
     };
     child.stdout.on("data", (c: Buffer) => capture(c, "out"));
     child.stderr.on("data", (c: Buffer) => capture(c, "err"));
+    const progressTimer = setTimeout(() => {
+      if (!settled) process.stderr.write(`[keel] still waiting: ${command} ${args.join(" ")}...\n`);
+    }, PROGRESS_THRESHOLD_MS);
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, opts.timeoutMs);
     child.on("error", (err) => {
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(progressTimer);
       resolve({ stdout, stderr, code: null, timedOut, spawnError: err.message });
     });
     child.on("close", (code) => {
+      settled = true;
       clearTimeout(timer);
+      clearTimeout(progressTimer);
       resolve({ stdout, stderr, code, timedOut });
     });
   });
@@ -125,7 +129,7 @@ function runProcess(
 
 async function git(cwd: string, args: string[]): Promise<{ stdout: string } | null> {
   try {
-    return await execFileAsync("git", args, { cwd, maxBuffer: 256 * 1024 * 1024 });
+    return await execFileTimed("git", args, { cwd, maxBuffer: 256 * 1024 * 1024, label: `git ${args[0] ?? ""}` });
   } catch {
     return null;
   }
@@ -361,9 +365,10 @@ async function applyChange(
   const patchFile = path.join(worktree, ".keel-sandbox.patch");
   fs.writeFileSync(patchFile, patch.endsWith("\n") ? patch : patch + "\n");
   try {
-    await execFileAsync("git", ["apply", "--whitespace=nowarn", patchFile], {
+    await execFileTimed("git", ["apply", "--whitespace=nowarn", patchFile], {
       cwd: worktree,
       maxBuffer: 64 * 1024 * 1024,
+      label: "git apply",
     });
     return null;
   } catch (err) {
@@ -973,7 +978,7 @@ function firstErrorLine(output: string): string {
 
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
   const started = Date.now();
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? runnerTimeoutMs();
   const maxTests = options.maxTests ?? DEFAULT_MAX_TESTS;
   const done = (r: Omit<SandboxResult, "durationMs">): SandboxResult => ({
     ...r,

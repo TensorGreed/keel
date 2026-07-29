@@ -10,6 +10,12 @@
  * cloud providers stay confined to this offline pipeline, per CLAUDE.md's cost rules. This is
  * not a place for flagship-model reasoning.
  */
+import { fetchTimed, modelTimeoutMs, ollamaGenerateTimeoutMs } from "../util/timeouts.js";
+
+function isTimeout(err: unknown): boolean {
+  const name = (err as Error)?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
 
 export interface DecisionModel {
   /** Complete a prompt to text. Throws MinerModelError on failure (surfaced as data upstream). */
@@ -42,14 +48,23 @@ export class OllamaModel implements DecisionModel {
   }
 
   async complete(prompt: string): Promise<string> {
+    const timeoutMs = ollamaGenerateTimeoutMs();
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl.replace(/\/$/, "")}/api/generate`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: this.model, prompt, stream: false, format: "json" }),
-      });
+      res = await fetchTimed(
+        `${this.baseUrl.replace(/\/$/, "")}/api/generate`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ model: this.model, prompt, stream: false, format: "json" }),
+        },
+        timeoutMs,
+        `Ollama generate (${this.model})`,
+      );
     } catch (err) {
+      if (isTimeout(err)) {
+        throw new MinerModelError(`Ollama at ${this.baseUrl} timed out after ${Math.round(timeoutMs / 1000)}s (raise KEEL_OLLAMA_TIMEOUT to allow longer)`);
+      }
       throw new MinerModelError(`cannot reach Ollama at ${this.baseUrl}: ${(err as Error).message}`);
     }
     if (!res.ok) {
@@ -72,22 +87,31 @@ export class AnthropicModel implements DecisionModel {
   }
 
   async complete(prompt: string): Promise<string> {
+    const timeoutMs = modelTimeoutMs();
     let res: Response;
     try {
-      res = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-api-key": this.apiKey,
-          "anthropic-version": "2023-06-01",
+      res = await fetchTimed(
+        "https://api.anthropic.com/v1/messages",
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-api-key": this.apiKey,
+            "anthropic-version": "2023-06-01",
+          },
+          body: JSON.stringify({
+            model: this.model,
+            max_tokens: 1024,
+            messages: [{ role: "user", content: prompt }],
+          }),
         },
-        body: JSON.stringify({
-          model: this.model,
-          max_tokens: 1024,
-          messages: [{ role: "user", content: prompt }],
-        }),
-      });
+        timeoutMs,
+        `Anthropic (${this.model})`,
+      );
     } catch (err) {
+      if (isTimeout(err)) {
+        throw new MinerModelError(`Anthropic API timed out after ${Math.round(timeoutMs / 1000)}s (raise KEEL_MODEL_TIMEOUT to allow longer)`);
+      }
       throw new MinerModelError(`cannot reach the Anthropic API: ${(err as Error).message}`);
     }
     if (!res.ok) {
@@ -130,21 +154,30 @@ export class OpenAICompatibleModel implements DecisionModel {
 
   async complete(prompt: string): Promise<string> {
     const url = `${this.baseUrl.replace(/\/$/, "")}/chat/completions`;
+    const timeoutMs = modelTimeoutMs();
     let res: Response;
     try {
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${this.apiKey}`,
+      res = await fetchTimed(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: `Bearer ${this.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: this.model,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0,
+          }),
         },
-        body: JSON.stringify({
-          model: this.model,
-          messages: [{ role: "user", content: prompt }],
-          temperature: 0,
-        }),
-      });
+        timeoutMs,
+        `OpenAI-compatible (${this.model})`,
+      );
     } catch (err) {
+      if (isTimeout(err)) {
+        throw new MinerModelError(`OpenAI-compatible API at ${this.baseUrl} timed out after ${Math.round(timeoutMs / 1000)}s (raise KEEL_MODEL_TIMEOUT to allow longer)`);
+      }
       throw new MinerModelError(`cannot reach the OpenAI-compatible API at ${this.baseUrl}: ${(err as Error).message}`);
     }
     if (!res.ok) {

@@ -7,11 +7,8 @@
  * Automated authors (dependabot, renovate, github-actions, …) are excluded — a bot is never a
  * useful reviewer and shouldn't be counted as an owner.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileTimed } from "../util/timeouts.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
-
-const execFileAsync = promisify(execFile);
 
 /** Half-life for recency weighting: authorship this old counts half as much. */
 const DEFAULT_HALF_LIFE_DAYS = 180;
@@ -128,7 +125,7 @@ export async function suggestReviewers(
 /** The person who'd commit a working-tree change: `git config user.name`. null if unset. */
 export async function resolveCommitter(repoRoot: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["config", "user.name"], { cwd: repoRoot });
+    const { stdout } = await execFileTimed("git", ["config", "user.name"], { cwd: repoRoot, label: "git config user.name" });
     return stdout.trim() || null;
   } catch {
     return null;

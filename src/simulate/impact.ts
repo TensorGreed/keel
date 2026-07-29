@@ -16,15 +16,12 @@
  * Impact is computed against the HEAD baseline graph, so a deleted file still shows the
  * dependents it had before deletion.
  */
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { promisify } from "node:util";
 import ts from "typescript";
 import { isGraphSourcePath, type FileGraph } from "../graph/dependencies.js";
 import { gitShowHead, loadHeadGraph } from "../graph/cache.js";
-
-const execFileAsync = promisify(execFile);
+import { execFileTimed } from "../util/timeouts.js";
 
 export type ChangeStatus = "modified" | "added" | "deleted" | "renamed";
 
@@ -566,7 +563,7 @@ async function workingTreeDiff(repoRoot: string): Promise<FileDiff[]> {
 
 async function git(repoRoot: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFileTimed("git", args, { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024, label: `git ${args[0] ?? ""}` });
     return stdout;
   } catch {
     return null;
@@ -579,18 +576,19 @@ async function git(repoRoot: string, args: string[]): Promise<string | null> {
  * or null if the diff applies cleanly. get_impact/select_tests/preflight all reach this
  * through getImpact, so all three reject the same diffs preflight would.
  */
-function assertDiffApplies(repoRoot: string, diff: string): Promise<string | null> {
-  return new Promise((resolve) => {
-    const child = execFile(
-      "git",
-      ["apply", "--check", "--whitespace=nowarn", "-"],
-      { cwd: repoRoot, maxBuffer: 64 * 1024 * 1024 },
-      (error, _stdout, stderr) => {
-        resolve(error ? String(stderr).trim() || error.message : null);
-      },
-    );
-    child.stdin?.end(diff.endsWith("\n") ? diff : diff + "\n");
-  });
+async function assertDiffApplies(repoRoot: string, diff: string): Promise<string | null> {
+  try {
+    await execFileTimed("git", ["apply", "--check", "--whitespace=nowarn", "-"], {
+      cwd: repoRoot,
+      maxBuffer: 64 * 1024 * 1024,
+      label: "git apply --check",
+      input: diff.endsWith("\n") ? diff : diff + "\n",
+    });
+    return null;
+  } catch (err) {
+    const e = err as Error & { stderr?: string };
+    return (e.stderr ?? "").trim() || e.message;
+  }
 }
 
 /** The propagating baseline node for a changed file, plus the exports it changed. Returns

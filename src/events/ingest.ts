@@ -4,13 +4,10 @@
  * IGNORE) and incremental (a cursor in the meta table), so restarts are cheap and never
  * duplicate. No LLM calls in this layer (see CLAUDE.md).
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileTimed } from "../util/timeouts.js";
 import { listCommits, type CommitRecord } from "../git/commits.js";
 import type { KeelEvent } from "./store.js";
 import type { SqliteEventStore } from "./sqlite-store.js";
-
-const execFileAsync = promisify(execFile);
 
 const LAST_SHA_KEY = "git.last_sha";
 const DEFAULT_BACKFILL_LIMIT = 5000;
@@ -37,7 +34,7 @@ function log(message: string): void {
 
 async function isGitRepo(repoRoot: string): Promise<boolean> {
   try {
-    await execFileAsync("git", ["rev-parse", "--git-dir"], { cwd: repoRoot });
+    await execFileTimed("git", ["rev-parse", "--git-dir"], { cwd: repoRoot, label: "git rev-parse --git-dir" });
     return true;
   } catch {
     return false;

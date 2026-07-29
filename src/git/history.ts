@@ -2,10 +2,8 @@
  * Git history access, v0: shell out to `git log`. Zero dependencies, deterministic.
  * The event log (src/events/) will subsume this once SQLite persistence lands.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { execFileTimed } from "../util/timeouts.js";
 
-const execFileAsync = promisify(execFile);
 const FIELD_SEP = "";
 const RECORD_SEP = "";
 
@@ -24,10 +22,10 @@ export async function historyFor(
   limit = 20,
 ): Promise<CommitInfo[]> {
   const format = ["%H", "%an", "%ae", "%aI", "%s", "%b"].join(FIELD_SEP) + RECORD_SEP;
-  const { stdout } = await execFileAsync(
+  const { stdout } = await execFileTimed(
     "git",
     ["log", `--max-count=${limit}`, `--format=${format}`, "--follow", "--", relPath],
-    { cwd: repoRoot, maxBuffer: 10 * 1024 * 1024 },
+    { cwd: repoRoot, maxBuffer: 10 * 1024 * 1024, label: `git log --follow ${relPath}` },
   );
   return stdout
     .split(RECORD_SEP)

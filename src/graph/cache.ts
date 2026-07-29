@@ -15,11 +15,9 @@
  * The disk cache is written only when the working tree has no graph-affecting changes, so a
  * persisted graph always corresponds exactly to commit `head`.
  */
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { promisify } from "node:util";
 import {
   buildFileGraph,
   deserializeFileGraph,
@@ -29,8 +27,7 @@ import {
   type FileGraph,
 } from "./dependencies.js";
 import { initGraphScanners } from "./scanners.js";
-
-const execFileAsync = promisify(execFile);
+import { execFileTimed } from "../util/timeouts.js";
 
 const CACHE_FILE = "graph.json";
 const CONFIG_BASENAMES = new Set([
@@ -209,7 +206,7 @@ function writeDiskCache(root: string, head: string, graph: FileGraph): void {
 
 async function git(root: string, args: string[]): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", args, { cwd: root, maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFileTimed("git", args, { cwd: root, maxBuffer: 64 * 1024 * 1024, label: `git ${args[0] ?? ""}` });
     return stdout;
   } catch {
     return null;

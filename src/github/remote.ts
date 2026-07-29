@@ -2,10 +2,7 @@
  * Resolve which GitHub repo to ingest: from `git remote get-url origin` (https or ssh),
  * or a `--repo owner/repo` override. github.com only for now.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { execFileTimed } from "../util/timeouts.js";
 
 export interface RepoRef {
   owner: string;
@@ -51,7 +48,7 @@ export async function resolveRepoRef(
   }
   let url: string;
   try {
-    const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], { cwd: repoRoot });
+    const { stdout } = await execFileTimed("git", ["remote", "get-url", "origin"], { cwd: repoRoot, label: "git remote get-url origin" });
     url = stdout.trim();
   } catch {
     return { error: "no 'origin' remote; pass --repo owner/repo" };
@@ -67,7 +64,7 @@ export async function resolveHeadSha(repoRoot: string, override?: string): Promi
     return /^[0-9a-f]{7,40}$/i.test(sha) ? sha : { error: `--sha must be a git SHA, got "${override}"` };
   }
   try {
-    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+    const { stdout } = await execFileTimed("git", ["rev-parse", "HEAD"], { cwd: repoRoot, label: "git rev-parse HEAD" });
     return stdout.trim();
   } catch {
     return { error: "cannot resolve HEAD (no commits yet?); pass --sha" };

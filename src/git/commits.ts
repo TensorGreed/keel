@@ -3,10 +3,7 @@
  * Shells out to `git log --name-status` (zero deps, deterministic). Separate from
  * history.ts, which serves get_history's per-path, rename-following queries.
  */
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
+import { execFileTimed } from "../util/timeouts.js";
 
 // Control-byte separators git will never emit inside the fields we ask for: RS between
 // commits, US between fields. Subject (%s) is placed last so the name-status lines that
@@ -50,9 +47,10 @@ export async function listCommits(
 
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync("git", args, {
+    ({ stdout } = await execFileTimed("git", args, {
       cwd: repoRoot,
       maxBuffer: 256 * 1024 * 1024,
+      label: `git log (${repoRoot})`,
     }));
   } catch (err) {
     const stderr = String((err as { stderr?: unknown }).stderr ?? "");
