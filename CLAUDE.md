@@ -58,7 +58,7 @@ src/
   init.ts           `keel init`: register keel in a project's .mcp.json
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
                     select_tests, preflight, why, verdict, context, suggest_reviewers,
-                    get_history)
+                    get_history, flaky_tests; workspace_impact when in a workspace)
   graph/            System graph, language-agnostic composer + a per-language scanner seam:
                     scanner.ts (LanguageScanner interface), typescript-scanner.ts (TS compiler
                     API), python-scanner.ts (web-tree-sitter WASM, grammar in graph/wasm/),

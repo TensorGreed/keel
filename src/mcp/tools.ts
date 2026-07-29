@@ -21,6 +21,8 @@ import { computeHotspots, coveredFiles } from "../trust/hotspots.js";
 import { loadPolicy, DEFAULT_POLICY } from "../trust/policy.js";
 import { authorShares, resolveCommitter, suggestReviewers } from "../ownership/ownership.js";
 import { detectFlakyTests } from "../ci/flaky.js";
+import { findWorkspaceConfig, loadWorkspaceConfig } from "../workspace/config.js";
+import { buildWorkspaceGraph, memberOf, qualify, workspaceBlastRadius } from "../workspace/graph.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 
 function normalize(repoRoot: string, input: string): string {
@@ -40,6 +42,9 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
     registerSuggestReviewers(server, repoRoot, store);
     registerFlakyTests(server, store);
   }
+
+  // Cross-repo tool: only when this repo is part of a workspace (keel.workspace.json at/above it).
+  if (findWorkspaceConfig(repoRoot)) registerWorkspaceImpact(server, repoRoot);
 
   server.tool(
     "get_dependencies",
@@ -376,6 +381,61 @@ function registerVerdict(server: McpServer, repoRoot: string, store: SqliteEvent
         );
       } catch (err) {
         return json({ error: `verdict failed: ${(err as Error).message}` });
+      }
+    },
+  );
+}
+
+/** Registered only when this repo is part of a workspace (keel.workspace.json at/above KEEL_REPO). */
+function registerWorkspaceImpact(server: McpServer, repoRoot: string): void {
+  server.tool(
+    "workspace_impact",
+    "Cross-repo blast radius: given a file, return every file across ALL repos in the workspace " +
+      "(keel.workspace.json) that transitively depends on it — grouped by repo — plus the cross-repo " +
+      "import edges on those paths. This is how you see that changing a shared library reaches the " +
+      "services in OTHER repos that import its published package (TS by package.json name, Python/Go " +
+      "by the sibling's own resolver). Files are addressed as <repo>::<path>; a bare path is taken to " +
+      "be in the current repo (KEEL_REPO). Deterministic static analysis, no guesses. NOTE: this is " +
+      "the graph/impact layer only — keel's EXECUTION (preflight, verdict) stays single-repo, so a " +
+      "cross-repo dependent is a candidate to check by hand, not an executed test result.",
+    { file: z.string().describe("A file as <repo>::<path>, or a bare path in the current repo (KEEL_REPO)") },
+    async ({ file }) => {
+      try {
+        const cfg = loadWorkspaceConfig(repoRoot);
+        if ("error" in cfg) return json({ error: cfg.error });
+        const graph = await buildWorkspaceGraph(cfg);
+
+        // Qualify the input: a bare path is assumed to live in the current repo (a workspace member).
+        let qualified = file;
+        if (!file.includes("::")) {
+          const here = cfg.members.find((m) => m.root === path.resolve(repoRoot));
+          if (!here) {
+            return json({ error: `${repoRoot} is not a member of ${cfg.file}; address the file as <repo>::<path>` });
+          }
+          qualified = qualify(here.name, normalize(repoRoot, file));
+        }
+        if (!graph.files.includes(qualified)) {
+          return json({ error: `"${qualified}" is not a workspace file (address it as <repo>::<path>; see \`keel workspace\`)` });
+        }
+
+        const radius = workspaceBlastRadius(graph, qualified);
+        const impacted = new Set([qualified, ...radius]);
+        const byRepo: Record<string, string[]> = {};
+        for (const f of radius) (byRepo[memberOf(f)] ??= []).push(f);
+        for (const list of Object.values(byRepo)) list.sort();
+
+        return json({
+          file: qualified,
+          repo: memberOf(qualified),
+          blastRadius: radius.length,
+          crossRepoDependents: radius.filter((f) => memberOf(f) !== memberOf(qualified)).length,
+          byRepo,
+          // the cross-repo edges that carry the impact across a boundary (both endpoints impacted)
+          crossEdges: graph.crossEdges.filter((e) => impacted.has(e.from) && impacted.has(e.to)),
+          members: graph.members.map((m) => m.name),
+        });
+      } catch (err) {
+        return json({ error: `workspace_impact failed: ${(err as Error).message}` });
       }
     },
   );
