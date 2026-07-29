@@ -43,3 +43,26 @@ describe("FetchGitHubClient 401 handling", () => {
     }
   });
 });
+
+describe("FetchGitHubClient per-request timeout", () => {
+  it("surfaces a stalled request as a resumable, timed-out GitHubError (never hangs)", async () => {
+    // A fetch that resolves only when its AbortSignal fires — as a real stalled connection would.
+    globalThis.fetch = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () => reject((init.signal as AbortSignal).reason));
+        }),
+    ) as typeof fetch;
+
+    try {
+      await new FetchGitHubClient(undefined, 20).get("/repos/o/r/pulls"); // 20ms timeout
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(GitHubError);
+      const e = err as GitHubError;
+      expect(e.timedOut).toBe(true);
+      expect(e.status).toBe(0);
+      expect(e.message).toMatch(/timed out/i);
+    }
+  }, 2000);
+});

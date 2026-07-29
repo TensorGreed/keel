@@ -83,6 +83,7 @@ class FakeGitHubClient implements GitHubClient {
     const rateLimit = { remaining: this.opts.rateLimitRemaining ?? 5000, limit: 5000, reset: 1_700_000_000 };
     const respond = (data: unknown): GitHubResponse<T> => ({ data: data as T, nextPage: null, rateLimit });
 
+    if (pathOrUrl === "/user") return respond({ login: "keelbot" }); // the start-banner auth probe
     if (/\/pulls\?/.test(pathOrUrl)) return respond(this.repo.pulls);
     const m = /\/pulls\/(\d+)\/(files|reviews|comments)/.exec(pathOrUrl);
     if (m) {
@@ -208,6 +209,99 @@ describe("GitHub PR ingestion", () => {
     const store = new SqliteEventStore(":memory:");
     const result = await ingestGitHub(store, new FakeGitHubClient(REPO, { authenticated: true }), REF);
     expect(result.authenticated).toBe(true);
+    store.close();
+  });
+});
+
+// --- observability: progress, start banner, timeout-as-resumable-stop -------
+
+/** A minimal PR object; timestamps descend with the PR number so the list is "newest-updated first". */
+function makePulls(count: number, firstNumber = count): unknown[] {
+  return Array.from({ length: count }, (_, i) => {
+    const number = firstNumber - i;
+    return {
+      number,
+      title: `PR ${number}`,
+      body: "",
+      state: "open",
+      merged_at: null,
+      created_at: "2021-01-01T00:00:00Z",
+      updated_at: new Date(Date.UTC(2021, 0, 1) + number * 3_600_000).toISOString(),
+      user: { login: "x" },
+      html_url: "u",
+      base: { ref: "main" },
+      head: { ref: "b" },
+    };
+  });
+}
+
+/** A fake that paginates the PR list across several pages (each PR's sub-resources are empty). */
+class PagingFakeClient implements GitHubClient {
+  readonly authenticated = false;
+  constructor(private readonly pages: unknown[][]) {}
+  async get<T>(pathOrUrl: string): Promise<GitHubResponse<T>> {
+    const rateLimit = { remaining: 5000, limit: 5000, reset: 1_700_000_000 };
+    const isList = /\/pulls(?:\?|$)/.test(pathOrUrl) && !/\/pulls\/\d+\//.test(pathOrUrl);
+    if (isList) {
+      const m = /[?&]page=(\d+)/.exec(pathOrUrl);
+      const idx = m ? Number(m[1]) - 1 : 0;
+      const nextPage = idx + 1 < this.pages.length ? `/repos/o/r/pulls?page=${idx + 2}` : null;
+      return { data: (this.pages[idx] ?? []) as T, nextPage, rateLimit };
+    }
+    return { data: [] as unknown as T, nextPage: null, rateLimit }; // files / reviews / comments
+  }
+  post<T>(): Promise<GitHubResponse<T>> {
+    throw new Error("PagingFakeClient.post is not used by ingestion");
+  }
+}
+
+describe("GitHub PR ingestion — observability", () => {
+  it("announces the target and auth mode on start (authenticated → the token user)", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const lines: string[] = [];
+    await ingestGitHub(store, new FakeGitHubClient(REPO, { authenticated: true }), REF, { onProgress: (m) => lines.push(m) });
+    expect(lines[0]).toBe("ingesting o/r as keelbot");
+    store.close();
+  });
+
+  it("announces unauthenticated access when no token is set", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const lines: string[] = [];
+    await ingestGitHub(store, new PagingFakeClient([makePulls(1)]), REF, { onProgress: (m) => lines.push(m) });
+    expect(lines[0]).toMatch(/^ingesting o\/r unauthenticated/);
+    store.close();
+  });
+
+  it("emits a progress line per page of PRs", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const lines: string[] = [];
+    await ingestGitHub(store, new PagingFakeClient([makePulls(2, 4), makePulls(2, 2)]), REF, { onProgress: (m) => lines.push(m) });
+    const pageLines = lines.filter((m) => /^page \d+\/\d+:/.test(m));
+    expect(pageLines.length).toBe(2);
+    expect(pageLines[0]).toMatch(/^page 1\/10: 2 PRs, 0 comments/);
+    expect(pageLines[1]).toMatch(/^page 2\/10: 4 PRs, 0 comments/);
+    store.close();
+  });
+
+  it("emits fine-grained progress every N PRs within a long page", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const lines: string[] = [];
+    await ingestGitHub(store, new PagingFakeClient([makePulls(50)]), REF, { onProgress: (m) => lines.push(m) });
+    expect(lines.some((m) => /…25 PRs, \d+ comments/.test(m))).toBe(true);
+    store.close();
+  });
+
+  it("treats a request timeout as a clean, resumable stop — never a silent hang", async () => {
+    const store = new SqliteEventStore(":memory:");
+    const client = new FakeGitHubClient(REPO, {
+      failOnPath: "/pulls/2/reviews",
+      failWith: new GitHubError(0, "request to GitHub timed out after 30s", null, true),
+    });
+    const result = await ingestGitHub(store, client, REF);
+
+    expect(result.stopped).toBe("timeout");
+    expect(result.error).toBeUndefined(); // a clean stop, not an error
+    expect(store.getMeta(CURSOR_KEY)).toBeUndefined(); // cursor untouched → re-running resumes
     store.close();
   });
 });

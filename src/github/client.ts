@@ -33,6 +33,8 @@ export class GitHubError extends Error {
     readonly status: number,
     message: string,
     readonly rateLimit: RateLimit | null = null,
+    /** true when the request timed out — a resumable stop (like a rate limit), never a silent hang */
+    readonly timedOut = false,
   ) {
     super(message);
     this.name = "GitHubError";
@@ -45,12 +47,22 @@ export class GitHubError extends Error {
 }
 
 const API_BASE = "https://api.github.com";
+const DEFAULT_HTTP_TIMEOUT_MS = 30_000;
+
+/** Per-request timeout in ms: KEEL_HTTP_TIMEOUT (in seconds) when set and positive, else 30s. A
+ *  stalled connection (e.g. a corporate proxy) would otherwise hang the whole backfill forever. */
+export function httpTimeoutMs(): number {
+  const seconds = Number(process.env["KEEL_HTTP_TIMEOUT"]);
+  return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : DEFAULT_HTTP_TIMEOUT_MS;
+}
 
 export class FetchGitHubClient implements GitHubClient {
   readonly authenticated: boolean;
+  private readonly timeoutMs: number;
 
-  constructor(private readonly token?: string) {
+  constructor(private readonly token?: string, timeoutMs?: number) {
     this.authenticated = Boolean(token);
+    this.timeoutMs = timeoutMs ?? httpTimeoutMs();
   }
 
   get<T>(path: string): Promise<GitHubResponse<T>> {
@@ -69,7 +81,7 @@ export class FetchGitHubClient implements GitHubClient {
       "X-GitHub-Api-Version": "2022-11-28",
     };
     if (this.token) headers["Authorization"] = `Bearer ${this.token}`;
-    const init: RequestInit = { method, headers };
+    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(this.timeoutMs) };
     if (body !== undefined) {
       headers["Content-Type"] = "application/json";
       init.body = JSON.stringify(body);
@@ -79,7 +91,12 @@ export class FetchGitHubClient implements GitHubClient {
     try {
       res = await fetch(url, init);
     } catch (err) {
-      throw new GitHubError(0, `network error contacting GitHub: ${(err as Error).message}`);
+      const e = err as Error;
+      // AbortSignal.timeout fires a TimeoutError; treat it as a clean, resumable timeout stop.
+      if (e.name === "TimeoutError" || e.name === "AbortError") {
+        throw new GitHubError(0, `request to GitHub timed out after ${Math.round(this.timeoutMs / 1000)}s (raise KEEL_HTTP_TIMEOUT to allow longer)`, null, true);
+      }
+      throw new GitHubError(0, `network error contacting GitHub: ${e.message}`);
     }
     const rateLimit = parseRateLimit(res.headers);
     if (!res.ok) {

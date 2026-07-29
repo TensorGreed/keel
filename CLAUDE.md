@@ -144,7 +144,11 @@ Phase 2 (team memory) is complete. `keel ingest` backfills GitHub PRs + review t
 the event log; `keel mine` extracts decision records from them with a local (Ollama) or
 batch-Haiku model and embeds them locally for retrieval — incrementally: it tracks which PRs
 it has mined (any outcome) so a re-run only touches new or changed PRs and never re-charges
-the model for a no-decision PR. Model calls happen only here (offline) plus a local query
+the model for a no-decision PR. Backfill is observable and un-hangable: it prints the auth
+mode + target on start (`ingesting owner/repo as <user>` — validates the token too), a
+progress line per PR page (and every N PRs within a page) to stderr, and every request has a
+30s timeout (`KEEL_HTTP_TIMEOUT`, seconds) — a stalled proxy surfaces as the same clean
+"resume by re-running" stop as a rate limit (`GitHubError.timedOut`), never a silent hang. Model calls happen only here (offline) plus a local query
 embedding in the server. The `why` MCP tool answers "why is this like this?" for a file or
 question, linking decisions through the graph with PR source receipts; `keel decision
 add`/`reject` gives humans an override that outranks or suppresses mined records.

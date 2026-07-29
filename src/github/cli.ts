@@ -22,7 +22,9 @@ Usage: keel ingest [--repo owner/repo] [--max-pages N]
 ADRs under docs/adr/ and docs/decisions/ are ingested locally on every run — no
 network or remote needed. GitHub PR ingestion also runs when a remote resolves;
 set GITHUB_TOKEN for higher rate limits (public repos work at 60 requests/hour).
-Safe to re-run — both sources resume from where they left off.`;
+Backfill prints per-page progress to stderr; each request times out after 30s
+(KEEL_HTTP_TIMEOUT, in seconds). Safe to re-run — both sources resume from where
+they left off (a timeout or rate limit stops cleanly, never a hang).`;
 
 /** Emit to stderr — stdout stays clean for the summary line. */
 function warn(message: string): void {
@@ -83,10 +85,13 @@ export async function runIngest(argv: string[]): Promise<number> {
       return 0;
     }
     const token = process.env["GITHUB_TOKEN"];
-    if (!token) {
-      warn("no GITHUB_TOKEN: ingesting unauthenticated (public repos only, 60 requests/hour). Set GITHUB_TOKEN for higher limits.");
-    }
-    const result = await ingestGitHub(store, new FetchGitHubClient(token), ref, maxPages !== undefined ? { maxPages } : {});
+    // The auth mode + target are announced by ingestGitHub itself (via onProgress), so a
+    // misconfiguration is visible on the first line, and each page of the backfill reports progress
+    // to stderr — a long run is never mistaken for a hang.
+    const result = await ingestGitHub(store, new FetchGitHubClient(token), ref, {
+      ...(maxPages !== undefined ? { maxPages } : {}),
+      onProgress: warn,
+    });
     console.log(
       `[keel] ${result.mode}: ingested ${result.ingested} new event(s) from ${result.prs} PR(s) ` +
         `and ${result.reviewComments} review comment(s) in ${result.repo}`,
@@ -101,6 +106,9 @@ export async function runIngest(argv: string[]): Promise<number> {
     if (result.stopped === "rate-limit") {
       const when = result.rateReset ? ` (resets around ${new Date(result.rateReset * 1000).toISOString()})` : "";
       warn(`GitHub rate limit reached${when}; resume by re-running${token ? "" : " — set GITHUB_TOKEN to raise the limit"}`);
+    }
+    if (result.stopped === "timeout") {
+      warn(`a GitHub request timed out (raise KEEL_HTTP_TIMEOUT if your network is slow); progress saved, resume by re-running`);
     }
     return 0;
   } finally {

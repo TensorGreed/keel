@@ -15,6 +15,9 @@ import { GitHubError, type GitHubClient, type GitHubResponse } from "./client.js
 import { repoSlug, type RepoRef } from "./remote.js";
 
 const DEFAULT_MAX_PAGES = 10;
+/** Emit a progress line at least this often during a page's detail fetches (a page can hold 100
+ *  PRs, each 3 sub-requests — without this, a single page can go quiet for minutes). */
+const PROGRESS_EVERY_PRS = 25;
 
 // Minimal shapes of the GitHub REST responses we read.
 interface PullRequest {
@@ -65,7 +68,7 @@ export interface GitHubIngestResult {
   /** the updated_at high-water mark, when the run completed cleanly */
   cursor?: string;
   /** why the run stopped early, if it did */
-  stopped?: "page-cap" | "rate-limit";
+  stopped?: "page-cap" | "rate-limit" | "timeout";
   /** epoch seconds when a hit rate limit resets */
   rateReset?: number;
   /** a clean API/network error message, if the run failed part-way */
@@ -74,6 +77,9 @@ export interface GitHubIngestResult {
 
 export interface GitHubIngestOptions {
   maxPages?: number;
+  /** called with a human-readable progress line (no prefix) during backfill — the CLI writes it to
+   *  stderr, so a multi-minute run is never mistaken for a hang. */
+  onProgress?: (message: string) => void;
 }
 
 function envMaxPages(): number | undefined {
@@ -159,6 +165,7 @@ export async function ingestGitHub(
   options: GitHubIngestOptions = {},
 ): Promise<GitHubIngestResult> {
   const maxPages = options.maxPages ?? envMaxPages() ?? DEFAULT_MAX_PAGES;
+  const progress = (message: string): void => options.onProgress?.(message);
   const slug = repoSlug(ref);
   const cursorKey = `github:${slug}:pr_updated_at`;
   const cursor = store.getMeta(cursorKey);
@@ -168,7 +175,7 @@ export async function ingestGitHub(
   let prs = 0;
   let reviewComments = 0;
   let newestUpdated: string | null = cursor ?? null;
-  let stopped: "page-cap" | "rate-limit" | undefined;
+  let stopped: "page-cap" | "rate-limit" | "timeout" | undefined;
   let rateReset: number | undefined;
   let completed = false;
   let apiError: string | undefined;
@@ -178,6 +185,15 @@ export async function ingestGitHub(
   let listPages = 0;
 
   try {
+    // Announce the auth mode + target up front, so a misconfiguration (wrong repo, invalid token) is
+    // visible immediately rather than after a run of requests. The /user probe also validates a token.
+    if (client.authenticated) {
+      const user = await client.get<{ login?: string }>("/user");
+      progress(`ingesting ${slug} as ${user.data.login ?? "an authenticated user"}`);
+    } else {
+      progress(`ingesting ${slug} unauthenticated — 60 requests/hour; set GITHUB_TOKEN for more`);
+    }
+
     outer: while (page) {
       if (listPages >= maxPages) {
         stopped = "page-cap";
@@ -202,8 +218,11 @@ export async function ingestGitHub(
         for (const comment of comments) events.push(reviewCommentEvent(ref, pr, comment));
         prs++;
         reviewComments += comments.length;
+        // fine-grained progress within a page, so detail fetches never look like a stall
+        if (prs % PROGRESS_EVERY_PRS === 0) progress(`  …${prs} PRs, ${reviewComments} comments so far`);
       }
 
+      progress(`page ${listPages}/${maxPages}: ${prs} PRs, ${reviewComments} comments so far`);
       page = resp.nextPage;
       if (page && resp.rateLimit && resp.rateLimit.remaining <= 0) {
         stopped = "rate-limit";
@@ -214,7 +233,10 @@ export async function ingestGitHub(
     }
   } catch (err) {
     if (!(err instanceof GitHubError)) throw err;
-    if (err.isRateLimit) {
+    if (err.timedOut) {
+      // A stalled request is a clean, resumable stop — the cursor stays put and re-running continues.
+      stopped = "timeout";
+    } else if (err.isRateLimit) {
       stopped = "rate-limit";
       if (err.rateLimit) rateReset = err.rateLimit.reset;
     } else {
