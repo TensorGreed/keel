@@ -27,6 +27,7 @@ Usage:
   keel decision  record a human decision (add) or reject a mined one
   keel ci        ingest JUnit test reports from a CI run (for flaky-test detection)
   keel verdict   pass/warn/block a change against keel.policy.json (for CI / hooks)
+  keel prompt-context  surface decisions relevant to a prompt (Claude Code UserPromptSubmit hook)
   keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel workspace one dependency graph across repos (keel.workspace.json)
   keel --help    show this help
@@ -77,6 +78,11 @@ switch (command) {
   case "verdict": {
     const { runVerdict } = await import("./trust/verdict-cli.js");
     process.exit(await runVerdict(rest));
+    break;
+  }
+  case "prompt-context": {
+    const { runPromptContext } = await import("./retrieval/prompt-context-cli.js");
+    process.exit(await runPromptContext(rest));
     break;
   }
   case "report": {

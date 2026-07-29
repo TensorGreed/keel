@@ -89,7 +89,10 @@ src/
                     Cloud runs > 25 PRs print a cost estimate first; local stays the default.
   retrieval/        Decision index: embed.ts (local embeddings, injectable),
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
-                    composition — file links + semantic/keyword, human overrides, receipts)
+                    composition — file links + semantic/keyword, human overrides, receipts),
+                    prompt-context.ts + prompt-context-cli.ts (`keel prompt-context`: a Claude Code
+                    UserPromptSubmit hook that fast-matches the prompt to decisions and injects the
+                    top 3 as additionalContext — budgeted, silent on no hits, never errors/blocks)
   context/          briefing.ts: the `context` tool — resolve a task's candidate files, then
                     compose blast radius + history + decisions + tests + owners + policy risks
                     (ranked, capped, keyword-fallback like why). No generative calls.
@@ -318,3 +321,14 @@ roots/modules). Edges route by the importing file's language, so no cross-langua
 Blast radius crosses repos (`keel workspace impact name::file`). Deterministic, no model calls;
 Java cross-repo (jars) deferred. Scope: graph/impact only — execution, decisions, and MCP tools
 stay single-repo this pass.
+
+**Unprompted memory** closes the adoption gap that tool descriptions and CLAUDE.md guidance leave
+open: agents still answer code questions by reading code and never call `why`. `keel prompt-context`
+(`src/retrieval/prompt-context.ts` + `-cli.ts`) is a Claude Code **UserPromptSubmit** hook — it reads
+the prompt on stdin, fast-matches it against the decision index (keyword over summaries/rationales +
+a *local* query embedding when Ollama answers within ~500ms, hard ~1s total budget), and injects the
+top 3 relevant decisions as `additionalContext` (summary + PR/ADR receipt + linked files, one line
+each). Because it runs on every prompt the contract is strict: no hits → empty output, and it never
+errors, never blocks, never over-runs the budget (the embedding is raced and dropped on any slowness,
+per principle 1). Wired in `recipes/claude-code-hook.md` alongside the `verdict` Stop hook, and this
+repo dogfoods both in `.claude/settings.json`. No remote/generative calls.

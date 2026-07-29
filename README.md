@@ -85,6 +85,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `decision` | record a human decision (`add`) or reject a mined one |
 | `ci` | ingest JUnit reports (for flaky-test detection) |
 | `verdict` | `pass/warn/block` a change; exit codes for CI, `--hook`, `--github-check` |
+| `prompt-context` | Claude Code UserPromptSubmit hook: inject decisions relevant to the prompt |
 | `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
 
@@ -150,8 +151,9 @@ npm install && npm run build && npm test
 node dist/index.js init --command "node ./dist/index.js"   # point a repo at this build
 ```
 
-This repo dogfoods itself: its own `.mcp.json`, `keel.policy.json`, and a `verdict` Stop hook
-(`.claude/settings.json`) gate every change to Keel with Keel.
+This repo dogfoods itself: its own `.mcp.json`, `keel.policy.json`, a `verdict` Stop hook and a
+`prompt-context` UserPromptSubmit hook (`.claude/settings.json`) gate every change to Keel with
+Keel and surface its own decision memory as you work.
 
 ## Releasing
 

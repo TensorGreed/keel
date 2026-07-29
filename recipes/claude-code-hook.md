@@ -68,6 +68,54 @@ Or set `KEEL_MAX_TESTS` / `KEEL_MAX_SECONDS` in the hook's environment. If the s
 tests at the cap, that's surfaced as a warning (or a block, if your policy sets
 `forbidTruncatedSim`).
 
+## Companion hook: surface decision memory on every prompt (UserPromptSubmit)
+
+The Stop hook gates a *finished* change. A `UserPromptSubmit` hook works at the other end — when
+you send a prompt — and solves a different problem: even with Keel's tools and CLAUDE.md guidance
+in place, an agent asked a code question tends to answer by reading code and never calls `why`.
+That's rational behavior; this hook stops fighting it and pushes the memory to the agent instead.
+
+`keel prompt-context` reads the prompt on stdin, does a fast match against the decision index
+(keyword over decision summaries/rationales, plus local embeddings when Ollama answers quickly,
+under a hard ~1s budget), and — only when there are hits — prints the top 3 relevant decisions as
+`additionalContext` (each one line: summary, PR/ADR receipt, linked files). No hits → no output.
+It never errors, never blocks, and stays under budget: a hook that slows every prompt gets
+uninstalled, so silence is the default.
+
+Add it alongside the Stop hook in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "KEEL_REPO=\"$CLAUDE_PROJECT_DIR\" node /absolute/path/to/keel/dist/index.js prompt-context"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "KEEL_REPO=\"$CLAUDE_PROJECT_DIR\" node /absolute/path/to/keel/dist/index.js verdict --hook"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+It draws on the same decision index as the `why` tool, so it's only as rich as what you've
+ingested and mined — with zero decisions it simply stays silent (graph and sim value are
+unaffected). Remote/generative calls are never made; the only model touched is a *local* query
+embedding, and it's dropped the moment it exceeds the budget.
+
 ## Variations
 
 ### CI gate instead of a hook
