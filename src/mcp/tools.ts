@@ -34,6 +34,26 @@ function json(data: unknown): { content: Array<{ type: "text"; text: string }> }
   return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
 }
 
+/**
+ * How many non-suppressed decision records are linked to any of `files`. Cheap: one byKind read,
+ * then a membership check (a repo has far fewer decisions than a blast radius has files). This is
+ * the signal for the "call why" nudge appended to get_dependencies / get_impact — so recorded
+ * decisions surface even when the agent read the code and never thought to ask.
+ */
+async function countLinkedDecisions(store: SqliteEventStore, files: Set<string>): Promise<number> {
+  if (files.size === 0) return 0;
+  const suppressed = store.suppressedDecisions();
+  let count = 0;
+  for (const decision of await store.byKind("decision", 100_000)) {
+    if (decision.externalId !== undefined && suppressed.has(decision.externalId)) continue;
+    if ((decision.files ?? []).some((f) => files.has(f))) count++;
+  }
+  return count;
+}
+
+const decisionsNotice = (n: number): string =>
+  `${n} recorded decision(s) touch these files — call \`why\` for details before removing, reverting, or simplifying their current behavior.`;
+
 export function registerTools(server: McpServer, repoRoot: string, store?: SqliteEventStore): void {
   if (store) {
     registerWhy(server, repoRoot, store);
@@ -67,11 +87,17 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
         }
         const { graph } = await loadGraph(repoRoot);
         const report = reportFor(graph, rel);
-        return json({
+        const out: Record<string, unknown> = {
           ...report,
           blastRadius: report.transitiveDependents.length,
           filesScanned: graph.files.length,
-        });
+        };
+        // Surface recorded decisions on this file or its direct neighbors, even if unasked.
+        if (store) {
+          const n = await countLinkedDecisions(store, new Set([rel, ...report.dependencies, ...report.dependents]));
+          if (n > 0) out["decisionsNotice"] = decisionsNotice(n);
+        }
+        return json(out);
       } catch (err) {
         return json({ error: `get_dependencies failed: ${(err as Error).message}` });
       }
@@ -90,7 +116,14 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
     { diff: z.string().optional().describe("Unified diff; omit to use uncommitted working-tree changes") },
     async ({ diff }) => {
       try {
-        return json(await getImpact(repoRoot, diff !== undefined ? { diff } : {}));
+        const result = await getImpact(repoRoot, diff !== undefined ? { diff } : {});
+        // Surface recorded decisions on any changed or impacted file, even if unasked.
+        if (store && !("error" in result)) {
+          const files = new Set<string>([...result.changedFiles.map((c) => c.path), ...result.impactedFiles]);
+          const n = await countLinkedDecisions(store, files);
+          if (n > 0) return json({ ...result, decisionsNotice: decisionsNotice(n) });
+        }
+        return json(result);
       } catch (err) {
         return json({ error: `get_impact failed: ${(err as Error).message}` });
       }
@@ -180,7 +213,11 @@ function registerWhy(server: McpServer, repoRoot: string, store: SqliteEventStor
   server.tool(
     "why",
     "Answer 'why is this like this?' from mined + human-recorded decision records, with " +
-      "source receipts (the PR that made the call, its author and date). Give a file path, a " +
+      "source receipts (the PR that made the call, its author and date). " +
+      "CALL THIS BEFORE agreeing to any change that removes, reverts, or simplifies existing " +
+      "behavior — the code's current shape may be a recorded decision, and endorsing its reversal " +
+      "without checking is how teams relearn old lessons. " +
+      "Give a file path, a " +
       "question, or both (both = decisions linked to the file, ranked by the question). " +
       "Each decision carries its origin (mined | human — human overrides win), why it matched " +
       "(direct / dependency / dependent graph link, or semantic / keyword), and its source. " +
@@ -225,7 +262,11 @@ function registerContext(server: McpServer, repoRoot: string, store: SqliteEvent
     "Brief a coding task before touching it: given a free-text task (and optionally files you " +
       "already know are involved), resolve the candidate files and, for each, return its blast " +
       "radius + key dependents, recent history, linked decisions (with PR receipts), and covering " +
-      "tests. Rolls up suggestedTests, relevantDecisions (human-recorded first), and risks " +
+      "tests. CALL THIS BEFORE starting work — and especially before agreeing to any change that " +
+      "removes, reverts, or simplifies existing behavior — the code's current shape may be a " +
+      "recorded decision (surfaced here in relevantDecisions), and endorsing its reversal without " +
+      "checking is how teams relearn old lessons. " +
+      "Rolls up suggestedTests, relevantDecisions (human-recorded first), and risks " +
       "(uncovered / high-blast-radius / protected-path / top-hotspot). Pure composition of the " +
       "graph, git, the event log, the decision index, and keel.policy.json — no generative calls; " +
       "ranking uses the same LOCAL embedding as `why` and falls back to keyword. Capped to the " +
