@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { initMcpConfig } from "../src/init.js";
+import { initMcpConfig, writeClaudeMdGuidance } from "../src/init.js";
 
 let dir: string;
 
@@ -110,5 +110,66 @@ describe("keel init", () => {
     expect(readConfig()).toEqual({
       mcpServers: { keel: { command: "keel", env: { KEEL_REPO: "." } } },
     });
+  });
+});
+
+describe("keel init — CLAUDE.md agent guidance", () => {
+  const CLAUDE = (): string => path.join(dir, "CLAUDE.md");
+  const START = "<!-- keel:guidance:start -->";
+  const END = "<!-- keel:guidance:end -->";
+
+  it("creates CLAUDE.md with the guidance when none exists", () => {
+    const result = writeClaudeMdGuidance(dir);
+    if ("error" in result) throw new Error(result.error);
+    expect(result.action).toBe("created");
+
+    const md = fs.readFileSync(CLAUDE(), "utf8");
+    expect(md).toContain(START);
+    expect(md).toContain(END);
+    expect(md).toContain("## Working with Keel");
+    // the four moments are all present
+    expect(md).toContain("call `context`");
+    expect(md).toContain("call `why`");
+    expect(md).toContain("call `preflight`");
+    expect(md).toContain("run `verdict`");
+  });
+
+  it("appends to an existing CLAUDE.md, preserving what was there", () => {
+    fs.writeFileSync(CLAUDE(), "# My Project\n\nHouse rules: use tabs.\n");
+    const result = writeClaudeMdGuidance(dir);
+    if ("error" in result) throw new Error(result.error);
+    expect(result.action).toBe("updated");
+
+    const md = fs.readFileSync(CLAUDE(), "utf8");
+    expect(md).toContain("# My Project"); // original content intact
+    expect(md).toContain("House rules: use tabs.");
+    expect(md.indexOf("House rules")).toBeLessThan(md.indexOf(START)); // appended AFTER the user's text
+  });
+
+  it("is idempotent: a re-run makes no change", () => {
+    fs.writeFileSync(CLAUDE(), "# My Project\n");
+    writeClaudeMdGuidance(dir);
+    const afterFirst = fs.readFileSync(CLAUDE(), "utf8");
+
+    const second = writeClaudeMdGuidance(dir);
+    if ("error" in second) throw new Error(second.error);
+    expect(second.action).toBe("unchanged");
+    expect(fs.readFileSync(CLAUDE(), "utf8")).toBe(afterFirst); // byte-identical
+  });
+
+  it("refreshes only the managed region, keeping content the user wrote after it", () => {
+    writeClaudeMdGuidance(dir); // creates the block
+    // A human appends their own section below Keel's block.
+    fs.appendFileSync(CLAUDE(), "\n## My own notes\n\nkeep me.\n");
+    const withTail = fs.readFileSync(CLAUDE(), "utf8");
+
+    const result = writeClaudeMdGuidance(dir); // re-run
+    if ("error" in result) throw new Error(result.error);
+    // Exactly one managed block, and the user's trailing section survives.
+    const md = fs.readFileSync(CLAUDE(), "utf8");
+    expect(md.match(new RegExp(START, "g"))?.length).toBe(1);
+    expect(md).toContain("## My own notes");
+    expect(md).toContain("keep me.");
+    expect(md).toBe(withTail); // nothing changed (the block was already current)
   });
 });

@@ -14,6 +14,87 @@ const DEFAULT_COMMAND = "keel";
 /** The published package name (`keel` is taken on npm), used for the npx fallback command. */
 const PUBLISHED_NAME = "@tensorgreed/keel";
 
+// --- CLAUDE.md agent guidance ----------------------------------------------
+
+const CLAUDE_MD = "CLAUDE.md";
+/** Idempotent markers around the managed block, so a re-run replaces exactly it and preserves
+ *  everything a human wrote around it. */
+const GUIDANCE_START = "<!-- keel:guidance:start -->";
+const GUIDANCE_END = "<!-- keel:guidance:end -->";
+
+/** The managed block appended to a target repo's CLAUDE.md — the distribution vehicle for the
+ *  consultation habit: tool descriptions reach an agent at tool-choice time, this reaches it at
+ *  session start. Kept short and imperative on purpose. */
+function guidanceBlock(): string {
+  return [
+    GUIDANCE_START,
+    "",
+    "## Working with Keel",
+    "",
+    "Keel is available in this repo as an MCP server: a deterministic development-intelligence layer",
+    "(system graph, an *executed* flight simulator, and team decision memory). Prefer it over guessing:",
+    "",
+    "- **Before starting work**, call `context` with your task — it returns the candidate files, their",
+    "  blast radius, covering tests, and any recorded decisions that touch them.",
+    "- **Before removing, reverting, or simplifying existing behavior**, call `why` on the file (or ask",
+    "  a question). The code's current shape may be a recorded decision; endorsing its reversal without",
+    "  checking is how teams relearn old lessons.",
+    "- **Before finalizing a change**, call `preflight` — it applies your diff in a sandbox and runs the",
+    "  covering tests, returning real pass/fail with traces, not a prediction.",
+    "- **Before committing**, run `verdict` (or `keel verdict`) for a machine-checkable pass/warn/block.",
+    "",
+    GUIDANCE_END,
+  ].join("\n");
+}
+
+export interface ClaudeMdResult {
+  path: string;
+  action: "created" | "updated" | "unchanged";
+}
+
+/**
+ * Add (or refresh) Keel's agent-guidance section in the target repo's CLAUDE.md. Idempotent by the
+ * marker comments: a first run appends the block (or creates the file); a re-run replaces just the
+ * managed region, leaving everything a human wrote around it intact, and reports "unchanged" when
+ * the file is byte-identical. Never overwrites a file it can't read.
+ */
+export function writeClaudeMdGuidance(dir: string): ClaudeMdResult | { error: string } {
+  const filePath = path.join(path.resolve(dir), CLAUDE_MD);
+  const block = guidanceBlock();
+
+  const existed = fs.existsSync(filePath);
+  let existing = "";
+  if (existed) {
+    try {
+      existing = fs.readFileSync(filePath, "utf8");
+    } catch (err) {
+      return { error: `cannot read ${filePath}: ${(err as Error).message}` };
+    }
+  }
+
+  let next: string;
+  const startIdx = existing.indexOf(GUIDANCE_START);
+  const endIdx = existing.indexOf(GUIDANCE_END);
+  if (!existed || existing.trim() === "") {
+    next = block + "\n";
+  } else if (startIdx !== -1 && endIdx > startIdx) {
+    // Replace exactly the managed region; keep the user's text before and after it.
+    next = existing.slice(0, startIdx) + block + existing.slice(endIdx + GUIDANCE_END.length);
+  } else {
+    next = existing.replace(/\n*$/, "") + "\n\n" + block + "\n"; // append after the user's content
+  }
+
+  if (existed && next === existing) {
+    return { path: filePath, action: "unchanged" };
+  }
+  try {
+    fs.writeFileSync(filePath, next);
+  } catch (err) {
+    return { error: `cannot write ${filePath}: ${(err as Error).message}` };
+  }
+  return { path: filePath, action: existed ? "updated" : "created" };
+}
+
 /** Is `name` a runnable executable on the current PATH? Dependency-free; Windows-aware. */
 function isExecutableOnPath(name: string): boolean {
   const dirs = (process.env["PATH"] ?? "").split(path.delimiter).filter(Boolean);
@@ -130,20 +211,23 @@ export function initMcpConfig(options: InitOptions): InitResult | { error: strin
 
 const INIT_HELP = `keel init — register the Keel MCP server in a project's .mcp.json
 
-Usage: keel init [dir] [--name <name>] [--command <cmd>]
+Usage: keel init [dir] [--name <name>] [--command <cmd>] [--no-claude-md]
 
   dir              project directory to write .mcp.json into (default: KEEL_REPO or cwd)
   --name <name>    server key under mcpServers (default: keel)
   --command <cmd>  command the client runs to launch keel
                    (default: "keel" if on PATH, else "npx -y ${PUBLISHED_NAME}")
+  --no-claude-md   skip adding Keel usage guidance to the repo's CLAUDE.md (added by default)
 
-Merges into an existing .mcp.json without touching other servers; safe to re-run.`;
+Merges into an existing .mcp.json without touching other servers, and adds a short "Working with
+Keel" section to CLAUDE.md (between idempotent markers). Safe to re-run.`;
 
 /** CLI wrapper: parse argv, run, print a summary. Returns the process exit code. */
 export function runInit(argv: string[]): number {
   let dir: string | undefined;
   let serverName: string | undefined;
   let command: string | undefined;
+  let claudeMd = true;
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -151,6 +235,10 @@ export function runInit(argv: string[]): number {
     if (arg === "--help" || arg === "-h") {
       console.log(INIT_HELP);
       return 0;
+    }
+    if (arg === "--claude-md" || arg === "--no-claude-md") {
+      claudeMd = arg === "--claude-md";
+      continue;
     }
     if (arg === "--name" || arg === "--command") {
       const value = argv[++i];
@@ -183,8 +271,9 @@ export function runInit(argv: string[]): number {
         `Pass --command to override — e.g. --command "node ./dist/index.js" for a local build.`;
   }
 
+  const targetDir = dir ?? process.env["KEEL_REPO"] ?? process.cwd();
   const result = initMcpConfig({
-    dir: dir ?? process.env["KEEL_REPO"] ?? process.cwd(),
+    dir: targetDir,
     ...(serverName !== undefined ? { serverName } : {}),
     command: effectiveCommand,
   });
@@ -195,12 +284,25 @@ export function runInit(argv: string[]): number {
 
   if (result.action === "unchanged") {
     console.log(`[keel] "${result.serverName}" is already registered in ${result.path} (no changes)`);
-    return 0;
+  } else {
+    console.log(
+      `[keel] ${result.action} ${result.path} — registered "${result.serverName}" ` +
+        `(command: ${result.entry.command}). Restart your MCP client to pick it up.`,
+    );
+    if (autoNote) console.log(`[keel] ${autoNote}`);
   }
-  console.log(
-    `[keel] ${result.action} ${result.path} — registered "${result.serverName}" ` +
-      `(command: ${result.entry.command}). Restart your MCP client to pick it up.`,
-  );
-  if (autoNote) console.log(`[keel] ${autoNote}`);
+
+  // Agent guidance in the target repo's CLAUDE.md — reaches an agent at session start, where a tool
+  // description can't. Non-fatal: the .mcp.json registration is the primary job.
+  if (claudeMd) {
+    const md = writeClaudeMdGuidance(targetDir);
+    if ("error" in md) {
+      console.error(`[keel] note: could not update CLAUDE.md (${md.error}); .mcp.json is registered`);
+    } else if (md.action === "unchanged") {
+      console.log(`[keel] Keel guidance already present in ${md.path} (no changes)`);
+    } else {
+      console.log(`[keel] ${md.action} ${md.path} — added a "Working with Keel" section for agents.`);
+    }
+  }
   return 0;
 }

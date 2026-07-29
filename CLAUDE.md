@@ -55,7 +55,8 @@ src/
   index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision,
                     verdict, report
   serve.ts          Starts the MCP server over stdio; ingests commits first
-  init.ts           `keel init`: register keel in a project's .mcp.json
+  init.ts           `keel init`: register keel in a project's .mcp.json + add a "Working with
+                    Keel" guidance section to the repo's CLAUDE.md (idempotent markers; --no-claude-md)
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
                     select_tests, preflight, why, verdict, context, suggest_reviewers,
                     get_history, flaky_tests; workspace_impact when in a workspace)
