@@ -14,6 +14,7 @@ import { parseDecision } from "./decision.js";
 import type { DecisionModel } from "./model.js";
 import { MinerModelError } from "./model.js";
 import { buildDecisionPrompt, type PrThread, type ThreadComment, type ThreadReview } from "./prompt.js";
+import { DECISION_TEXT_CAPS, sanitizeAlternatives, sanitizeDecisionText } from "../util/sanitize.js";
 
 export interface MineOptions {
   /** cap PRs mined this run (newest-updated first); default 200 */
@@ -100,14 +101,17 @@ function decisionEvent(pr: KeelEvent, thread: PrThread, record: ReturnType<typeo
     externalId: `decision:${pr.externalId}`,
     occurredAt: pr.occurredAt,
     ...(pr.actor ? { actor: pr.actor } : {}),
-    title: d.summary,
+    title: sanitizeDecisionText(d.summary, DECISION_TEXT_CAPS.summary),
     payload: {
       origin: "mined",
       sourcePr: pr.externalId,
       prNumber: thread.number,
-      summary: d.summary,
-      rationale: d.rationale,
-      alternatives: d.alternatives,
+      // The model's output is derived from an attacker-influenced PR thread — neutralize and cap it
+      // at the store boundary so a hostile body can't smuggle control chars or a fake instruction
+      // block into every downstream reader (why / context / prompt-context).
+      summary: sanitizeDecisionText(d.summary, DECISION_TEXT_CAPS.summary),
+      rationale: sanitizeDecisionText(d.rationale, DECISION_TEXT_CAPS.rationale),
+      alternatives: sanitizeAlternatives(d.alternatives),
       confidence: d.confidence,
       // Grounded links are the PR's real files; the model's list is advisory.
       mentionedFiles: d.files,
