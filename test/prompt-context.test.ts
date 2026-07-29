@@ -56,16 +56,26 @@ class FakeEmbed implements EmbeddingModel {
 }
 
 describe("matchPromptDecisions — keyword", () => {
-  it("surfaces a decision whose summary/rationale shares words with the prompt", async () => {
+  it("surfaces a decision on a distinctive term overlap", async () => {
     const store = new FakeStore([
-      decision("d:238", "Derive the IV per message", "hardcoding a static IV made nonce reuse a vuln", ["src/crypto.ts"]),
+      decision("d:nonce", "Derive a per-message nonce for the cipher", "reusing a static nonce leaked plaintext", ["src/cipher.ts"]),
       decision("d:99", "Prefer flat config files", "nested config was hard to override", ["src/config.ts"]),
     ]);
-    const hits = await matchPromptDecisions(store, "can we just hardcode the IV again to simplify crypto", {
+    const hits = await matchPromptDecisions(store, "why do we derive a fresh nonce instead of reusing one", {
       embedModel: null,
     });
-    expect(hits.map((h) => h.id)).toEqual(["d:238"]);
-    expect(hits[0]!.files).toEqual(["src/crypto.ts"]);
+    expect(hits.map((h) => h.id)).toEqual(["d:nonce"]);
+    expect(hits[0]!.files).toEqual(["src/cipher.ts"]);
+  });
+
+  it("does not count a generic-term overlap as a hit", async () => {
+    // The prompt and the decision share "run" and "sample", but those are generic repo vocabulary;
+    // the distinctive term ("snowflake") isn't in the decision, so it must stay silent.
+    const store = new FakeStore([
+      decision("d:fpe", "Run the FPE sample cipher", "the sample runs the FPE routine"),
+    ]);
+    const hits = await matchPromptDecisions(store, "how do I run the Snowflake sample", { embedModel: null });
+    expect(hits).toEqual([]);
   });
 
   it("returns nothing when no decision relates to the prompt (silent by default)", async () => {
@@ -120,32 +130,108 @@ describe("matchPromptDecisions — semantic + budget", () => {
     expect(hits.map((h) => h.id)).toEqual(["d:A"]);
   });
 
+  it("requires a minimum cosine — a weakly-similar decision does not surface", async () => {
+    const embeddings = new Map<string, Float32Array>([
+      ["d:hi", Float32Array.from([0.8, 0.6])], // cosine 0.80 with the query → clears the bar
+      ["d:lo", Float32Array.from([0.55, 0.8352])], // cosine 0.55 → below the 0.6 floor
+    ]);
+    const store = new FakeStore(
+      [decision("d:hi", "alpha widget", "gamma"), decision("d:lo", "beta gadget", "delta")],
+      embeddings,
+    );
+    const embed = new FakeEmbed(async () => [Float32Array.from([1, 0])]);
+    const hits = await matchPromptDecisions(store, "should the client slow down when the server is overwhelmed", {
+      embedModel: embed,
+    });
+    expect(hits.map((h) => h.id)).toEqual(["d:hi"]);
+  });
+
   it("falls back to keyword-only when the embedder hangs past the budget", async () => {
     const store = new FakeStore(
-      [decision("d:238", "Derive the IV per message", "hardcoding a static IV was a vuln", ["src/crypto.ts"])],
-      new Map([["d:238", Float32Array.from([1, 0])]]),
+      [decision("d:nonce", "Derive a per-message nonce in the cipher", "reusing a static nonce leaked plaintext", ["src/cipher.ts"])],
+      new Map([["d:nonce", Float32Array.from([1, 0])]]),
     );
     const hang = new FakeEmbed(() => new Promise<Float32Array[]>(() => {})); // never resolves
     const started = performance.now();
-    const hits = await matchPromptDecisions(store, "hardcode the IV in crypto", { embedModel: hang, budgetMs: 50 });
+    const hits = await matchPromptDecisions(store, "why do we derive a fresh nonce", { embedModel: hang, budgetMs: 50 });
     // keyword still finds it, and we didn't wait on the hung embedder
-    expect(hits.map((h) => h.id)).toEqual(["d:238"]);
+    expect(hits.map((h) => h.id)).toEqual(["d:nonce"]);
     expect(performance.now() - started).toBeLessThan(500);
   });
 
   it("falls back to keyword-only when the embedder is unreachable (throws)", async () => {
     const store = new FakeStore(
-      [decision("d:238", "Derive the IV per message", "hardcoding a static IV was a vuln")],
-      new Map([["d:238", Float32Array.from([1, 0])]]),
+      [decision("d:nonce", "Derive a per-message nonce", "reusing a static nonce leaked plaintext")],
+      new Map([["d:nonce", Float32Array.from([1, 0])]]),
     );
     const down = new FakeEmbed(() => Promise.reject(new EmbeddingError("cannot reach Ollama")));
-    const hits = await matchPromptDecisions(store, "hardcode the IV", { embedModel: down });
-    expect(hits.map((h) => h.id)).toEqual(["d:238"]);
+    const hits = await matchPromptDecisions(store, "why derive a nonce per message", { embedModel: down });
+    expect(hits.map((h) => h.id)).toEqual(["d:nonce"]);
   });
 
   it("stays silent (no throw) on an empty prompt", async () => {
     const store = new FakeStore([decision("d:1", "anything", "anything")]);
     expect(await matchPromptDecisions(store, "   ", { embedModel: null })).toEqual([]);
+  });
+});
+
+describe("matchPromptDecisions — relevance gate", () => {
+  it("skips a generic prompt with no distinctive terms without touching the store", async () => {
+    let byKindCalls = 0;
+    const store: DecisionSource = {
+      byKind: async () => {
+        byKindCalls++;
+        return [decision("d:x", "alpha", "beta")];
+      },
+      embeddingsByKind: () => new Map(),
+      suppressedDecisions: () => new Set(),
+    };
+    const hits = await matchPromptDecisions(store, "list the directories in this repo", { embedModel: null });
+    expect(hits).toEqual([]);
+    expect(byKindCalls).toBe(0); // no lookup at all — cheaper and safer
+  });
+});
+
+// The field-finding calibration cases, pinned. FPE + Snowflake decisions in one store; each prompt
+// must land exactly where the finding says it should. Keyword path (deterministic, no embedder).
+describe("matchPromptDecisions — calibration (pinned field cases)", () => {
+  const store = new FakeStore([
+    decision(
+      "258",
+      "Removed the fixed IV from the FPE sample",
+      "the fixed IV was reintroduced twice; FPE format-preserving encryption must use a per-call nonce",
+      ["samples/fpe/cipher.ts"],
+      { prNumber: 258 },
+    ),
+    decision(
+      "238",
+      "Derive the IV per message in the FPE sample",
+      "a hardcoded IV in the FPE routine broke format-preserving encryption; derive it from the tweak",
+      ["samples/fpe/cipher.ts"],
+      { prNumber: 238 },
+    ),
+    decision(
+      "248",
+      "Snowflake sample uses key-pair auth, not a password",
+      "the Snowflake connector sample must authenticate with a key pair; embedding a password was rejected",
+      ["samples/snowflake/conn.ts"],
+      { prNumber: 248 },
+    ),
+  ]);
+
+  it("'fixed IV in the FPE sample' → #258 and #238 surface", async () => {
+    const hits = await matchPromptDecisions(store, "fixed IV in the FPE sample", { embedModel: null });
+    expect(hits.map((h) => h.id).sort()).toEqual(["238", "258"]);
+  });
+
+  it("'list the directories in this repo' → empty", async () => {
+    const hits = await matchPromptDecisions(store, "list the directories in this repo", { embedModel: null });
+    expect(hits).toEqual([]);
+  });
+
+  it("'how do I run the Snowflake sample?' → #248 only", async () => {
+    const hits = await matchPromptDecisions(store, "how do I run the Snowflake sample?", { embedModel: null });
+    expect(hits.map((h) => h.id)).toEqual(["248"]);
   });
 });
 

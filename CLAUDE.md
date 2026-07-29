@@ -329,10 +329,14 @@ open: agents still answer code questions by reading code and never call `why`. `
 (`src/retrieval/prompt-context.ts` + `-cli.ts`) is a Claude Code **UserPromptSubmit** hook — it reads
 the prompt on stdin, fast-matches it against the decision index (keyword over summaries/rationales +
 a *local* query embedding when Ollama answers within ~500ms, hard ~1s total budget), and injects the
-top 3 relevant decisions as `additionalContext` (summary + PR/ADR receipt + linked files, one line
-each). Because it runs on every prompt the contract is strict: no hits → empty output, and it never
-errors, never blocks, never over-runs the budget (the embedding is raced and dropped on any slowness,
-per principle 1). `keel init` installs it by default (`writeSettingsHook` — a non-destructive,
+matching decisions as `additionalContext` (summary + PR/ADR receipt + linked files, one line each).
+It is deliberately **high-precision/low-recall** — silence is the correct output for most prompts: a
+match must clear a relevance bar (a *distinctive* keyword overlap — function words and generic repo/
+dev vocabulary in an `IGNORED_TERMS` set don't count — or a minimum cosine, `SEMANTIC_HIT`), a prompt
+with no distinctive terms is dropped *before* any store read or embedding, and it emits only what
+clears the bar (0–3, never padded to a fixed count). Because it runs on every prompt the contract is
+strict: no hits → empty output, and it never errors, never blocks, never over-runs the budget (the
+embedding is raced and dropped on any slowness, per principle 1). `keel init` installs it by default (`writeSettingsHook` — a non-destructive,
 idempotent merge into the target repo's `.claude/settings.json`, `--no-hooks` to skip; mirrors the
 same launch command it writes to `.mcp.json`). The stronger `verdict` **Stop** hook is a completion
 gate, so it stays opt-in via `recipes/claude-code-hook.md`; this repo dogfoods both in
