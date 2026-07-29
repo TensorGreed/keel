@@ -30,6 +30,7 @@ Usage:
   keel prompt-context  surface decisions relevant to a prompt (Claude Code UserPromptSubmit hook)
   keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel workspace one dependency graph across repos (keel.workspace.json)
+  keel doctor    check the environment is healthy (versions, db, runners, tokens)
   keel --help    show this help
   keel --version print the version
 
@@ -83,6 +84,11 @@ switch (command) {
   case "prompt-context": {
     const { runPromptContext } = await import("./retrieval/prompt-context-cli.js");
     process.exit(await runPromptContext(rest));
+    break;
+  }
+  case "doctor": {
+    const { runDoctor } = await import("./doctor/cli.js");
+    process.exit(await runDoctor(rest));
     break;
   }
   case "report": {

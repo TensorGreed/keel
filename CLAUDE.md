@@ -53,8 +53,14 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 ```
 src/
   index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision,
-                    verdict, report
+                    verdict, report, prompt-context, doctor
   serve.ts          Starts the MCP server over stdio; ingests commits first
+  doctor/           `keel doctor`: doctor.ts (pure checks over a gathered DoctorEnv → ok/warn/fail
+                    with one named fix each), cli.ts (defensive real-env probes; table + --json,
+                    exit 1 on red). Bounded probes via util/timeouts (2s GitHub/Ollama leash)
+  util/             timeouts.ts (central timeout policy + fetchTimed/execFileTimed/withProgress for
+                    every outbound call; audited by test/timeout-audit.test.ts) and sanitize.ts
+                    (neutralize+cap attacker-influenced decision text before it reaches an agent)
   init.ts           `keel init`: register keel in a project's .mcp.json + add a "Working with
                     Keel" guidance section to the repo's CLAUDE.md (idempotent markers; --no-claude-md)
                     + install the prompt-context UserPromptSubmit hook in .claude/settings.json
