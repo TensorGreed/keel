@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { KeelEvent } from "../events/store.js";
+import type { EventKind, KeelEvent } from "../events/store.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 import { parseAdr } from "./parse.js";
 
@@ -105,6 +105,7 @@ export async function ingestAdrs(
   let unchanged = 0;
   let linked = 0;
   const toAppend: KeelEvent[] = [];
+  const toDelete: { kind: EventKind; externalId: string }[] = [];
 
   for (const rel of files) {
     const abs = path.join(repoRoot, rel);
@@ -120,7 +121,7 @@ export async function ingestAdrs(
       unchanged++;
       continue;
     }
-    if (existingHash.has(externalId)) store.deleteEvent("decision", externalId); // edited — replace
+    if (existingHash.has(externalId)) toDelete.push({ kind: "decision", externalId }); // edited — replace
 
     const parsed = parseAdr(content);
     const linkedFiles = linkAdr(parsed.body, graphFiles);
@@ -147,6 +148,8 @@ export async function ingestAdrs(
     ingested++;
   }
 
-  store.appendMany(toAppend);
+  // One transaction for the whole scan: stale records deleted and their replacements appended
+  // together, so a crash can't drop an edited ADR's record without writing the new one.
+  store.replaceEvents(toDelete, toAppend);
   return { scanned: files.length, ingested, unchanged, linked };
 }

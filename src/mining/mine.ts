@@ -158,8 +158,7 @@ export async function mineDecisions(
   // Announce the plan before the first model call, so a cost guard can warn (CLAUDE.md cost rules).
   options.onPlan?.(toMine.length);
 
-  const events: KeelEvent[] = [];
-  let minedCount = 0;
+  let inserted = 0;
   let noDecision = 0;
   let errors = 0;
 
@@ -183,17 +182,14 @@ export async function mineDecisions(
       continue; // not marked mined — retried next run
     }
 
-    // Mined successfully (decision or not): mark it so an unchanged PR isn't re-mined.
-    store.markPrMined(pr.externalId!, prUpdatedAt(pr));
-    if (!parsed.hasDecision) {
-      noDecision++;
-      continue;
-    }
-    events.push(decisionEvent(pr, thread, parsed));
-    minedCount++;
+    // Persist this PR's outcome atomically: its decision event (if any) AND the mined mark go in
+    // one transaction, so a mid-mine crash can never mark a PR mined without storing its decision
+    // (which would silently skip it forever). Per-PR, so completed PRs stay durable across a kill.
+    const prEvents = parsed.hasDecision ? [decisionEvent(pr, thread, parsed)] : [];
+    inserted += store.appendManyAndMark(prEvents, [{ externalId: pr.externalId!, updatedAt: prUpdatedAt(pr) }]);
+    if (!parsed.hasDecision) noDecision++;
   }
 
-  const inserted = store.appendMany(events);
   return {
     model: model.name,
     total: prs.length,

@@ -130,13 +130,14 @@ export async function embedDecisions(store: SqliteEventStore, model: EmbeddingMo
       error = err.message;
       break;
     }
+    // One transaction per batch: a kill mid-run leaves whole committed batches, never a torn one.
+    const toStore: { kind: EventKind; externalId: string; vector: Float32Array }[] = [];
     batch.forEach((decision, j) => {
       const vector = vectors[j];
-      if (vector) {
-        store.setEmbedding(DECISION, decision.externalId!, vector);
-        embedded++;
-      }
+      if (vector) toStore.push({ kind: DECISION, externalId: decision.externalId!, vector });
     });
+    store.setEmbeddings(toStore);
+    embedded += toStore.length;
   }
 
   return {

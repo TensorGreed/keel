@@ -35,6 +35,16 @@ export function ollamaGenerateTimeoutMs(): number {
   return envSecondsToMs("KEEL_OLLAMA_TIMEOUT", 60_000);
 }
 
+/** How long a SQLite writer waits on SQLITE_BUSY before giving up (server + hook + `keel mine`
+ *  can all open the same db concurrently). Milliseconds directly (not seconds — this one is
+ *  sub-second-precision-sensitive), default 5s. */
+export function sqliteBusyTimeoutMs(): number {
+  const raw = process.env["KEEL_SQLITE_BUSY_TIMEOUT_MS"];
+  if (raw === undefined || raw === "") return 5_000;
+  const ms = Number(raw);
+  return Number.isFinite(ms) && ms > 0 ? Math.round(ms) : 5_000;
+}
+
 /** Ollama /api/embed (decision + query embedding). */
 export function ollamaEmbedTimeoutMs(): number {
   return envSecondsToMs("KEEL_OLLAMA_EMBED_TIMEOUT", 20_000);

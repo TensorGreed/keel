@@ -12,6 +12,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type * as Sqlite from "node:sqlite";
 import type { EventKind, EventStore, KeelEvent } from "./store.js";
+import { sqliteBusyTimeoutMs } from "../util/timeouts.js";
 
 // node:sqlite emits its ExperimentalWarning while the module is *loaded*, which for a
 // static import happens during ESM linking — before sqlite-warning.js's patch runs. A
@@ -26,6 +27,18 @@ const { DatabaseSync } = await import("node:sqlite");
 export const SCHEMA_VERSION = 1;
 
 const SCHEMA_SQL = fs.readFileSync(new URL("./schema.sql", import.meta.url), "utf8");
+
+/** node:sqlite surfaces SQLITE_BUSY as an Error with code ERR_SQLITE_ERROR and a "database is
+ *  locked"/"busy" message — the transient contention we retry through at open. */
+function isLockedError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string };
+  return e?.code === "ERR_SQLITE_ERROR" && /database is locked|database table is locked|is busy/i.test(e.message ?? "");
+}
+
+/** Synchronous sleep (constructors can't await). Only ever hit on the rare open-time lock retry. */
+function sleepMs(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
 
 interface EventRow {
   id: number | bigint;
@@ -44,11 +57,42 @@ export class SqliteEventStore implements EventStore {
     if (dbPath !== ":memory:") fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
     this.db = new DatabaseSync(dbPath);
-    // WAL: concurrent readers don't block the ingestion writer, and it survives crashes.
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec(SCHEMA_SQL);
-    this.applySchemaVersion();
+    this.initialize();
+  }
+
+  /**
+   * Configure and migrate the db, retrying the whole block on a transient "database is locked".
+   * The switch to WAL (`PRAGMA journal_mode = WAL`) needs a brief EXCLUSIVE lock that busy_timeout
+   * doesn't always cover, so two processes creating a brand-new db at the same instant can each
+   * see a lock error here. Every statement is idempotent (PRAGMAs, CREATE IF NOT EXISTS), so we
+   * just back off and retry until busy_timeout's worth of wall-clock has passed — then the loser
+   * finds the db already in WAL and sails through. The steady state (an existing WAL db) never
+   * retries.
+   */
+  private initialize(): void {
+    const deadline = Date.now() + sqliteBusyTimeoutMs();
+    for (let attempt = 0; ; attempt++) {
+      try {
+        // busy_timeout FIRST, so the ordinary lock waits below are honored. The server, the
+        // prompt-context hook, and `keel mine` can all open this db at once.
+        this.db.exec(`PRAGMA busy_timeout = ${sqliteBusyTimeoutMs()}`);
+        // WAL: concurrent readers never block the writer, and it's crash-safe — a hard kill
+        // mid-write leaves only committed frames behind; SQLite discards the torn tail on next
+        // open, so the db is never corrupt, only ever missing the uncommitted transaction.
+        this.db.exec("PRAGMA journal_mode = WAL");
+        // NORMAL is the canonical WAL pairing: a committed transaction survives a process crash
+        // (our kill-safety contract), trading only a possible loss of the very last commit on a
+        // full OS/power loss — fine for a re-runnable cache/log, and faster under contention.
+        this.db.exec("PRAGMA synchronous = NORMAL");
+        this.db.exec("PRAGMA foreign_keys = ON");
+        this.db.exec(SCHEMA_SQL);
+        this.applySchemaVersion();
+        return;
+      } catch (err) {
+        if (!isLockedError(err) || Date.now() >= deadline) throw err;
+        sleepMs(Math.min(25 * (attempt + 1), 200)); // brief backoff, then retry the idempotent setup
+      }
+    }
   }
 
   private applySchemaVersion(): void {
@@ -143,6 +187,21 @@ export class SqliteEventStore implements EventStore {
    * No-op if the event doesn't exist. The vector is stored as raw float32 bytes.
    */
   setEmbedding(kind: EventKind, externalId: string, vector: Float32Array): void {
+    this.setEmbeddingRow(kind, externalId, vector);
+  }
+
+  /**
+   * Store many embeddings in one transaction — one fsync for the batch, and crash-atomic (a kill
+   * mid-batch leaves either all-committed or none, never a torn half). Used by the offline
+   * embedding pass, which computes vectors in batches.
+   */
+  setEmbeddings(items: { kind: EventKind; externalId: string; vector: Float32Array }[]): void {
+    this.transaction(() => {
+      for (const it of items) this.setEmbeddingRow(it.kind, it.externalId, it.vector);
+    });
+  }
+
+  private setEmbeddingRow(kind: EventKind, externalId: string, vector: Float32Array): void {
     const row = this.db
       .prepare("SELECT id FROM events WHERE kind = ? AND external_id = ?")
       .get(kind, externalId) as { id: number | bigint } | undefined;
@@ -193,9 +252,28 @@ export class SqliteEventStore implements EventStore {
 
   /** Record that a PR has been mined at a given updated_at (any outcome, incl. no decision). */
   markPrMined(externalId: string, updatedAt: string): void {
+    this.markPrMinedRow(externalId, updatedAt);
+  }
+
+  private markPrMinedRow(externalId: string, updatedAt: string): void {
     this.db
       .prepare("INSERT OR REPLACE INTO mined_prs (external_id, updated_at) VALUES (?, ?)")
       .run(externalId, updatedAt);
+  }
+
+  /**
+   * Persist mined decision events AND mark their source PRs mined in ONE transaction, so a crash
+   * can never leave a PR flagged mined whose decision was never stored (a silent-loss gap the
+   * miner would otherwise skip on re-run) — or the reverse. Returns how many events were newly
+   * inserted. `keel mine` calls this per PR, keeping incremental progress crash-atomic.
+   */
+  appendManyAndMark(events: KeelEvent[], marks: { externalId: string; updatedAt: string }[]): number {
+    let inserted = 0;
+    this.transaction(() => {
+      for (const event of events) if (this.insertOne(event)) inserted++;
+      for (const m of marks) this.markPrMinedRow(m.externalId, m.updatedAt);
+    });
+    return inserted;
   }
 
   /** PR external_id -> the updated_at it was last mined at (for incremental skip decisions). */
@@ -213,15 +291,31 @@ export class SqliteEventStore implements EventStore {
    * changed) — delete the stale event, then append the new one.
    */
   deleteEvent(kind: EventKind, externalId: string): void {
+    this.transaction(() => this.deleteEventRow(kind, externalId));
+  }
+
+  private deleteEventRow(kind: EventKind, externalId: string): void {
+    const row = this.db.prepare("SELECT id FROM events WHERE kind = ? AND external_id = ?").get(kind, externalId) as
+      | { id: number | bigint }
+      | undefined;
+    if (!row) return;
+    this.db.prepare("DELETE FROM embeddings WHERE event_id = ?").run(row.id);
+    this.db.prepare("DELETE FROM event_files WHERE event_id = ?").run(row.id);
+    this.db.prepare("DELETE FROM events WHERE id = ?").run(row.id);
+  }
+
+  /**
+   * Delete stale events and append their replacements in ONE transaction — so re-ingesting an
+   * edited source (e.g. an ADR whose content changed) can't crash between the delete and the
+   * re-append, leaving the old record gone and the new one never written. Returns newly inserted.
+   */
+  replaceEvents(remove: { kind: EventKind; externalId: string }[], append: KeelEvent[]): number {
+    let inserted = 0;
     this.transaction(() => {
-      const row = this.db.prepare("SELECT id FROM events WHERE kind = ? AND external_id = ?").get(kind, externalId) as
-        | { id: number | bigint }
-        | undefined;
-      if (!row) return;
-      this.db.prepare("DELETE FROM embeddings WHERE event_id = ?").run(row.id);
-      this.db.prepare("DELETE FROM event_files WHERE event_id = ?").run(row.id);
-      this.db.prepare("DELETE FROM events WHERE id = ?").run(row.id);
+      for (const r of remove) this.deleteEventRow(r.kind, r.externalId);
+      for (const event of append) if (this.insertOne(event)) inserted++;
     });
+    return inserted;
   }
 
   /** Mark a decision suppressed (a human "reject"); kept in the log, excluded from results. */
@@ -256,7 +350,9 @@ export class SqliteEventStore implements EventStore {
   }
 
   private transaction(fn: () => void): void {
-    this.db.exec("BEGIN");
+    // BEGIN IMMEDIATE takes the write lock up front, so a concurrent writer waits out
+    // busy_timeout at BEGIN rather than failing partway through on a lock upgrade.
+    this.db.exec("BEGIN IMMEDIATE");
     try {
       fn();
       this.db.exec("COMMIT");

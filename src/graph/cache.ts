@@ -191,15 +191,32 @@ function readDiskCache(root: string): DiskCache | null {
 }
 
 function writeDiskCache(root: string, head: string, graph: FileGraph): void {
+  const finalPath = cachePath(root);
+  // Write to a unique temp file in the same dir, then atomically rename over the target. A reader
+  // (or a concurrent writer — server + hook can both refresh) only ever sees the old file or the
+  // whole new one, never a half-written cache; and a crash mid-write leaves only the temp file
+  // (ignored, garbage-collected on the next successful write's rename). rename is atomic within a
+  // filesystem, which .keel/ always is.
+  const tmpPath = `${finalPath}.${process.pid}.${nextTmpSeq()}.tmp`;
   try {
     fs.mkdirSync(path.join(root, ".keel"), { recursive: true });
-    fs.writeFileSync(
-      cachePath(root),
-      JSON.stringify({ head, graph: serializeFileGraph(graph) }),
-    );
+    fs.writeFileSync(tmpPath, JSON.stringify({ head, graph: serializeFileGraph(graph) }));
+    fs.renameSync(tmpPath, finalPath);
   } catch {
-    // A cache we can't persist is not fatal — the in-memory graph is already correct.
+    // A cache we can't persist is not fatal — the in-memory graph is already correct. Clean up a
+    // temp file we may have left behind so it doesn't accumulate.
+    try {
+      fs.rmSync(tmpPath, { force: true });
+    } catch {
+      /* best effort */
+    }
   }
+}
+
+// Monotonic within a process so two writes from the same pid can't collide on a temp name.
+let tmpSeq = 0;
+function nextTmpSeq(): number {
+  return tmpSeq++;
 }
 
 // --- git helpers ------------------------------------------------------------
