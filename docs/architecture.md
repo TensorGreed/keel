@@ -71,6 +71,14 @@ source root, which is what over-reached and fused the samples. Modelling a packa
 a module is honest about what Java source expresses without pretending a shared package name means a
 shared codebase.
 
+Because a same-package pair is inherently *mutual* — A↔B with symbol `*` both ways and no import
+statement — it can read as a suspected analyzer artifact. So every edge in a dependency report carries
+its **provenance** (`edges` / `dependentEdges`, each `{ file, kind }`): `import` (a real directed
+import), `package` (this same-package unit adjacency), or `di` (Spring wiring). When two provenances
+coincide, the more specific wins (`import` > `di` > `package`); only the non-default kinds are stored,
+so the graph stays compact. The distinction is presentational — the edges and blast radius are
+unchanged — but it lets an agent read a mutual `*` edge as the unit-adjacency model, not a bug.
+
 **Spring DI edges — the runtime wiring imports can't express** (`src/graph/spring.ts`). Spring's
 most valuable coupling is invisible to imports: a `@Service` that injects a `PaymentGateway`
 *interface* imports the interface, never the concrete `StripeGateway` bean Spring wires in at

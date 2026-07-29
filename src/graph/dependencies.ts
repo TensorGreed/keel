@@ -9,9 +9,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { IGNORED_DIRS, toRepoRelative } from "./shared.js";
-import type { LanguageScanner } from "./scanner.js";
+import type { EdgeKind, LanguageScanner } from "./scanner.js";
 import { createScanners, GRAPH_EXTENSIONS } from "./scanners.js";
 import { applySpringEdges, javaFiles } from "./spring.js";
+
+/** Priority when an edge has more than one provenance: a real import outranks DI outranks adjacency. */
+const KIND_RANK: Record<EdgeKind, number> = { import: 3, di: 2, package: 1 };
+/** The higher-priority of two kinds; when nothing is recorded yet (undefined), take the new one. */
+function strongerKind(a: EdgeKind | undefined, b: EdgeKind): EdgeKind {
+  return a === undefined || KIND_RANK[b] > KIND_RANK[a] ? b : a;
+}
 
 export interface FileGraph {
   /** file -> files it imports (repo-relative posix paths) */
@@ -32,8 +39,20 @@ export interface FileGraph {
    * so the workspace layer can resolve cross-repo edges without re-scanning (see src/workspace/).
    */
   externalImports: Map<string, Set<string>>;
+  /**
+   * importer -> (imported file -> edge provenance), storing only NON-default kinds ("package"/"di").
+   * An edge absent here is a plain "import". Lets a report explain why a same-package pair shows up
+   * as mutual "*" edges (it's package-unit adjacency, not a suspected analyzer artifact). See EdgeKind.
+   */
+  edgeKind: Map<string, Map<string, EdgeKind>>;
   /** all scanned source files */
   files: string[];
+}
+
+/** A directed edge with its provenance (see EdgeKind), parallel to the flat dependency arrays. */
+export interface EdgeInfo {
+  file: string;
+  kind: EdgeKind;
 }
 
 export interface DependencyReport {
@@ -50,6 +69,10 @@ export interface DependencyReport {
   importsFrom: Record<string, string[]>;
   /** dependent file -> exports of this file it actually uses */
   usedBy: Record<string, string[]>;
+  /** `dependencies`, each with how the edge arises ("import" | "package" | "di"). Same order. */
+  edges: EdgeInfo[];
+  /** `dependents`, each with how the incoming edge arises. Same order. */
+  dependentEdges: EdgeInfo[];
 }
 
 function listSourceFiles(root: string): string[] {
@@ -83,10 +106,12 @@ interface FileScan {
   exports: Set<string>;
   /** specifiers that resolved to nothing in-repo (candidates for cross-repo resolution) */
   external: Set<string>;
+  /** target -> non-default edge kind for this file's outgoing edges (only "package" from scanners) */
+  edgeKind: Map<string, EdgeKind>;
 }
 
 function emptyScan(): FileScan {
-  return { imports: new Set(), importSymbols: new Map(), exports: new Set(), external: new Set() };
+  return { imports: new Set(), importSymbols: new Map(), exports: new Set(), external: new Set(), edgeKind: new Map() };
 }
 
 /** extension -> the scanner that owns it (first scanner wins on overlap). */
@@ -116,7 +141,8 @@ function scanFile(byExtension: Map<string, LanguageScanner>, root: string, absFi
   const imports = new Set<string>();
   const importSymbols = new Map<string, Set<string>>();
   const external = new Set<string>();
-  for (const { specifier, symbols } of result.imports) {
+  const kinds = new Map<string, EdgeKind>();
+  for (const { specifier, symbols, kind } of result.imports) {
     const resolved = scanner.resolveImport(specifier, absFile);
     if (!resolved) {
       external.add(specifier); // no in-repo target — a third-party package, or a workspace sibling's
@@ -133,9 +159,14 @@ function scanFile(byExtension: Map<string, LanguageScanner>, root: string, absFi
         importSymbols.set(rel, set);
       }
       for (const symbol of symbols) set.add(symbol);
+      // Record provenance; a real import to the same target outranks same-package adjacency.
+      kinds.set(rel, strongerKind(kinds.get(rel), kind ?? "import"));
     }
   }
-  return { imports, importSymbols, exports: result.exports, external };
+  // Store only non-default kinds — "import" is the default and needn't be persisted.
+  const edgeKind = new Map<string, EdgeKind>();
+  for (const [rel, k] of kinds) if (k !== "import") edgeKind.set(rel, k);
+  return { imports, importSymbols, exports: result.exports, external, edgeKind };
 }
 
 /** Invert file -> imports into file -> importedBy (importedBy is fully derived). */
@@ -162,6 +193,7 @@ export function buildFileGraph(repoRoot: string): FileGraph {
   const importSymbols = new Map<string, Map<string, Set<string>>>();
   const exportsOf = new Map<string, Set<string>>();
   const externalImports = new Map<string, Set<string>>();
+  const edgeKind = new Map<string, Map<string, EdgeKind>>();
   const relFiles: string[] = [];
 
   for (const file of listSourceFiles(root)) {
@@ -172,13 +204,14 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     importSymbols.set(rel, scan.importSymbols);
     exportsOf.set(rel, scan.exports);
     if (scan.external.size > 0) externalImports.set(rel, scan.external);
+    if (scan.edgeKind.size > 0) edgeKind.set(rel, scan.edgeKind);
   }
 
   // Spring DI enrichment: add the runtime wiring edges imports can't express (interface →
-  // implementation, @Bean factories). Cross-file by nature, so it runs once here on the full graph;
-  // a Java change forces a full rebuild rather than an incremental update (see graph/cache.ts).
+  // implementation, @Bean factories), labelled "di". Cross-file by nature, so it runs once here on
+  // the full graph; a Java change forces a full rebuild rather than an incremental update (cache.ts).
   const java = javaFiles(relFiles);
-  if (java.length > 0) applySpringEdges(root, java, imports, importSymbols);
+  if (java.length > 0) applySpringEdges(root, java, imports, importSymbols, edgeKind);
 
   return {
     imports,
@@ -186,6 +219,7 @@ export function buildFileGraph(repoRoot: string): FileGraph {
     importSymbols,
     exportsOf,
     externalImports,
+    edgeKind,
     files: relFiles.sort(),
   };
 }
@@ -213,6 +247,7 @@ export function updateFileGraph(
   const importSymbols = new Map(base.importSymbols);
   const exportsOf = new Map(base.exportsOf);
   const externalImports = new Map(base.externalImports);
+  const edgeKind = new Map(base.edgeKind);
 
   for (const rel of modifiedFiles) {
     const scan = scanFile(byExtension, root, path.resolve(root, rel)) ?? emptyScan();
@@ -221,9 +256,13 @@ export function updateFileGraph(
     exportsOf.set(rel, scan.exports);
     if (scan.external.size > 0) externalImports.set(rel, scan.external);
     else externalImports.delete(rel);
+    // A file's own outgoing edge kinds are recomputed from its rescan (no Java here — DI never
+    // reaches this path, since a .java change forces a full rebuild).
+    if (scan.edgeKind.size > 0) edgeKind.set(rel, scan.edgeKind);
+    else edgeKind.delete(rel);
   }
 
-  return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, files: base.files };
+  return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, edgeKind, files: base.files };
 }
 
 /** Everything that transitively depends on `file` — the blast radius of changing it. */
@@ -256,6 +295,12 @@ export function reportFor(graph: FileGraph, file: string): DependencyReport {
     usedBy[dependent] = [...(graph.importSymbols.get(dependent)?.get(file) ?? [])].sort();
   }
 
+  // Edge provenance: outgoing edges are keyed by (file -> dependency); an incoming edge's kind is
+  // keyed by (dependent -> file). Absent from edgeKind means the default "import".
+  const kindOf = (from: string, to: string): EdgeKind => graph.edgeKind?.get(from)?.get(to) ?? "import";
+  const edges = dependencies.map((dep) => ({ file: dep, kind: kindOf(file, dep) }));
+  const dependentEdges = dependents.map((dep) => ({ file: dep, kind: kindOf(dep, file) }));
+
   return {
     file,
     dependencies,
@@ -264,6 +309,8 @@ export function reportFor(graph: FileGraph, file: string): DependencyReport {
     exports: [...(graph.exportsOf.get(file) ?? [])].sort(),
     importsFrom,
     usedBy,
+    edges,
+    dependentEdges,
   };
 }
 
@@ -282,8 +329,8 @@ export function isGraphSourcePath(relPosixPath: string): boolean {
 
 /** On-disk graph format; bump when the serialized shape changes OR when the edges a build produces
  *  change, so stale caches are dropped. v2: multi-language graphs (v1 was TS/JS-only). v3: Spring DI
- *  edges. v4: retained external import specifiers (for cross-repo workspace resolution). */
-export const GRAPH_FORMAT_VERSION = 4;
+ *  edges. v4: retained external import specifiers. v5: edge provenance (package/di kinds). */
+export const GRAPH_FORMAT_VERSION = 5;
 
 export interface SerializedFileGraph {
   version: number;
@@ -292,6 +339,7 @@ export interface SerializedFileGraph {
   importSymbols: [string, [string, string[]][]][];
   exportsOf: [string, string[]][];
   externalImports: [string, string[]][];
+  edgeKind: [string, [string, EdgeKind][]][];
 }
 
 /** Convert a FileGraph to a JSON-serializable form (Maps/Sets -> arrays). importedBy is
@@ -307,6 +355,7 @@ export function serializeFileGraph(graph: FileGraph): SerializedFileGraph {
     ]),
     exportsOf: [...graph.exportsOf].map(([file, names]) => [file, [...names]]),
     externalImports: [...graph.externalImports].map(([file, specs]) => [file, [...specs]]),
+    edgeKind: [...graph.edgeKind].map(([file, byTarget]) => [file, [...byTarget]]),
   };
 }
 
@@ -318,7 +367,7 @@ export function deserializeFileGraph(data: unknown): FileGraph | null {
   if (d.version !== GRAPH_FORMAT_VERSION) return null;
   if (
     !Array.isArray(d.files) || !Array.isArray(d.imports) || !Array.isArray(d.importSymbols) ||
-    !Array.isArray(d.exportsOf) || !Array.isArray(d.externalImports)
+    !Array.isArray(d.exportsOf) || !Array.isArray(d.externalImports) || !Array.isArray(d.edgeKind)
   ) {
     return null;
   }
@@ -338,7 +387,10 @@ export function deserializeFileGraph(data: unknown): FileGraph | null {
     const externalImports = new Map<string, Set<string>>(
       d.externalImports.map(([file, specs]) => [file, new Set(specs)]),
     );
-    return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, files: d.files };
+    const edgeKind = new Map<string, Map<string, EdgeKind>>(
+      d.edgeKind.map(([file, byTarget]) => [file, new Map(byTarget)]),
+    );
+    return { imports, importedBy: invertImports(imports), importSymbols, exportsOf, externalImports, edgeKind, files: d.files };
   } catch {
     return null;
   }

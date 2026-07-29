@@ -52,7 +52,12 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
       "the full transitive blast radius of changing it, and symbol-level detail — the " +
       "file's exports, which symbols it imports from each dependency (importsFrom), and " +
       "which of its exports each dependent actually uses (usedBy; 'default' = default " +
-      "export, '*' = whole module). Deterministic, built from static analysis — no guesses.",
+      "export, '*' = whole module). Each dependency/dependent is also given with its edge " +
+      "provenance in `edges`/`dependentEdges` as { file, kind }: 'import' is a real directed " +
+      "import; 'package' is same-package unit adjacency (Java/Go treat a package as one unit — " +
+      "this edge is inherently mutual and shows symbol '*' both ways, so it is expected, not an " +
+      "analyzer bug); 'di' is Spring dependency-injection wiring (an injector to the bean that " +
+      "satisfies it, e.g. an interface's implementation). Deterministic static analysis — no guesses.",
     { file: z.string().describe("Path to a source file, relative to the repo root") },
     async ({ file }) => {
       try {

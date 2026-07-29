@@ -70,6 +70,17 @@ describe("go: single module, nested packages, import forms", () => {
     expect(r.dependencies).toEqual(["greet/greet.go", "greet/more.go"]);
   });
 
+  it("labels edge provenance: the synthetic same-package edge as 'package', a real import as 'import'", () => {
+    const kind = (from: string, to: string): string | undefined =>
+      reportFor(g, from).edges.find((e) => e.file === to)?.kind;
+    // The same-package test's edge is adjacency (no import statement) → "package".
+    expect(kind("greet/greet_test.go", "greet/greet.go")).toBe("package");
+    // The black-box test reaches the package through a real `import` → "import".
+    expect(kind("greet/greet_bb_test.go", "greet/greet.go")).toBe("import");
+    // main.go imports the package → "import".
+    expect(kind("main.go", "greet/greet.go")).toBe("import");
+  });
+
   it("a change to a package file lists both its same-package and black-box tests as dependents", () => {
     const r = reportFor(g, "greet/greet.go");
     expect(r.dependents).toEqual(["greet/greet_bb_test.go", "greet/greet_test.go", "main.go"]);

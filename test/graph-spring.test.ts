@@ -38,6 +38,19 @@ describe("spring DI edges", () => {
     expect(reportFor(g, `${M}/app/OrderService.java`).dependencies).toContain(`${M}/audit/AuditLog.java`);
   });
 
+  it("labels DI edges 'di', while the interface it imports stays 'import'", () => {
+    const r = reportFor(g, `${M}/app/OrderService.java`);
+    const kind = (f: string): string | undefined => r.edges.find((e) => e.file === f)?.kind;
+    // The wired-in impls and the @Bean factory are Spring DI edges imports can't express → "di".
+    expect(kind(`${M}/impl/StripeGateway.java`)).toBe("di");
+    expect(kind(`${M}/impl/PaypalGateway.java`)).toBe("di");
+    expect(kind(`${M}/config/AppConfig.java`)).toBe("di");
+    // The interface OrderService actually imports is a real import edge → "import".
+    expect(kind(`${M}/api/PaymentGateway.java`)).toBe("import");
+    // From the impl's side, the incoming edge from its injector is "di" too.
+    expect(reportFor(g, `${M}/impl/StripeGateway.java`).dependentEdges.find((e) => e.file === `${M}/app/OrderService.java`)?.kind).toBe("di");
+  });
+
   it("puts an implementation in the injector's blast radius (so a change selects its test)", () => {
     // Change StripeGateway → OrderService (DI) → OrderServiceTest (same-package adjacency). This is
     // the whole point: a test of the service is selected when a wired-in impl changes.

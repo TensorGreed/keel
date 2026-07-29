@@ -125,7 +125,12 @@ TS compiler API (with tsconfig path aliases, workspace resolution, and symbol-le
 usage), served from an incremental graph cache keyed by git HEAD (`graph/cache.ts`);
 `get_history` shells out to git log. The event log persists to SQLite (`SqliteEventStore`,
 node:sqlite) and ingests commits on startup. `keel init` registers the server in
-`.mcp.json`.
+`.mcp.json`. Every edge in a dependency report carries its **provenance** (`edges`/
+`dependentEdges`, each `{ file, kind }`): `import` (a real directed import), `package`
+(Java/Go same-package unit adjacency — inherently mutual, symbol `*` both ways, so a mutual
+`*` edge reads as the model, not an analyzer bug), or `di` (Spring wiring). `EdgeKind` in
+`scanner.ts`; only non-default kinds are stored (graph format v5); `import` > `di` > `package`
+when an edge has two provenances.
 
 Phase 1 (flight simulator) is complete. `get_impact` maps a diff to its impacted subgraph
 (symbol-narrowed, with an intra-file reference closure), `select_tests` picks the covering

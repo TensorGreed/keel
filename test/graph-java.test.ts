@@ -53,6 +53,17 @@ describe("java: single-module Maven, import forms + same-package adjacency", () 
     expect(reportFor(g, `${M}/app/Service.java`).dependents).toContain(`${T}/app/ServiceTest.java`);
   });
 
+  it("labels edge provenance so mutual same-package '*' edges read as adjacency, not a bug", () => {
+    const r = reportFor(g, `${M}/app/Service.java`);
+    const kind = (f: string): string | undefined => r.edges.find((e) => e.file === f)?.kind;
+    // Same-package files (mutual, symbol "*" both ways) are "package" — the unit-adjacency model.
+    expect(kind(`${M}/app/Support.java`)).toBe("package");
+    // A real single-type import is "import".
+    expect(kind(`${M}/util/Helper.java`)).toBe("import");
+    // Incoming edges carry the kind too: Support's dependent Service arrived via package adjacency.
+    expect(reportFor(g, `${M}/app/Support.java`).dependentEdges.find((e) => e.file === `${M}/app/Service.java`)?.kind).toBe("package");
+  });
+
   it("exports public top-level types only", () => {
     expect(reportFor(g, `${M}/app/Service.java`).exports).toEqual(["Service"]);
     expect(reportFor(g, `${M}/util/Helper.java`).exports).toEqual(["Helper"]);

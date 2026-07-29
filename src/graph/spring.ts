@@ -30,7 +30,7 @@ import * as path from "node:path";
 import type { Node } from "web-tree-sitter";
 import { parseJava } from "./java-scanner.js";
 import { discoverJavaLayout, moduleOf } from "./java-modules.js";
-import { WHOLE_MODULE } from "./scanner.js";
+import { WHOLE_MODULE, type EdgeKind } from "./scanner.js";
 
 /** Class annotations that mark a Spring bean (a candidate injection target and injector). */
 const STEREOTYPES = new Set([
@@ -276,6 +276,7 @@ export function applySpringEdges(
   javaRelFiles: string[],
   imports: Map<string, Set<string>>,
   importSymbols: Map<string, Map<string, Set<string>>>,
+  edgeKind: Map<string, Map<string, EdgeKind>>,
 ): void {
   const all: JavaTypeMeta[] = [];
   for (const rel of javaRelFiles) {
@@ -330,6 +331,7 @@ export function applySpringEdges(
       deps = new Set();
       imports.set(from, deps);
     }
+    const existed = deps.has(to); // did a real import / adjacency edge already exist here?
     deps.add(to);
     let syms = importSymbols.get(from);
     if (!syms) {
@@ -342,6 +344,18 @@ export function applySpringEdges(
       syms.set(to, set);
     }
     set.add(WHOLE_MODULE);
+
+    // Label the edge "di" when it's newly created by the DI pass, or when it upgrades a bare
+    // package-adjacency edge. A pre-existing real "import" edge (no kind stored) outranks DI and stays.
+    const cur = edgeKind.get(from)?.get(to);
+    if (!existed || cur === "package") {
+      let kinds = edgeKind.get(from);
+      if (!kinds) {
+        kinds = new Map();
+        edgeKind.set(from, kinds);
+      }
+      kinds.set(to, "di");
+    }
   };
 
   for (const t of all) {
