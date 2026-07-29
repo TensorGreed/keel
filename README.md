@@ -2,109 +2,125 @@
 
 [![CI](https://github.com/TensorGreed/keel/actions/workflows/ci.yml/badge.svg)](https://github.com/TensorGreed/keel/actions/workflows/ci.yml)
 
-**Your codebase, with memory and foresight.**
+**Your codebase, with memory and foresight.** A development intelligence layer for the agent era,
+delivered as an [MCP](https://modelcontextprotocol.io) server.
 
-Keel is a development intelligence layer for the agent era, delivered as an MCP server.
-Coding agents (Claude Code, Copilot, Cursor) can write almost any code you ask for —
-but they don't know *why* your system is the way it is, *what actually happens* if they
-change it, or *whether a change is safe to automate*. Keel answers those three questions:
+Coding agents (Claude Code, Copilot, Cursor) can write almost any code you ask for — but they
+don't know *why* your system is the way it is, *what actually breaks* if they change it, or
+*whether a change is safe to merge*. Keel answers those three questions, and it answers them with
+**executed proof and static facts, never model guesses**:
 
-- **Team memory** — "why is this like this?" answered with the real PR thread, ADR, or
-  incident that caused it. Git blame for intent.
-- **Flight simulator** — "what breaks if I change this?" answered by *executing* the
-  change against the dependents' tests in a sandbox. Proof, not prediction.
-- **Trust layer** — machine-checkable verdicts (blast radius, sim status, decision
-  conflicts) that let teams safely turn up agent autonomy.
+- **Team memory** — "why is this like this?" tied back to the real PR thread, ADR, or decision
+  that caused it. Git blame for intent.
+- **Flight simulator** — "what breaks if I change this?" answered by *executing* the change against
+  the covering tests in a sandboxed worktree. Proof, not prediction.
+- **Trust layer** — a machine-checkable `pass | warn | block` verdict (blast radius, executed sim,
+  coverage, decision conflicts, architecture rules) so teams can safely turn up agent autonomy.
 
-All three run on one substrate: an event log, a system graph, and a decision index.
-See [docs/concept.md](docs/concept.md) for the vision and
-[docs/architecture.md](docs/architecture.md) for the design.
+All three run on one deterministic substrate: an event log, a system graph, and a decision index.
+See [docs/concept.md](docs/concept.md) for the vision and [docs/architecture.md](docs/architecture.md)
+for the design.
 
 ## See it work
 
-Pointed at [honojs/hono](https://github.com/honojs/hono) (381 source files), from a cold start:
+Every number below was captured from a real run; reproduce the full hono walkthrough in ~3 minutes
+via **[docs/demo.md](docs/demo.md)**.
 
-- **What depends on `Context`?** → `get_dependencies` returns a blast radius of **196 files** in **~0.3s**.
-- **What breaks if cookie parsing is off by one char?** → `preflight` **executes** the covering
-  tests and returns **43 real failures across 6 files in ~1.8s**, each with the graph path from
-  the failing test back to the change.
-- **Is it safe to merge?** → `keel verdict` returns **BLOCK** (exit 2), naming the failing tests.
+Pointed at **[honojs/hono](https://github.com/honojs/hono)** (TypeScript, 381 files, commit `224d2f5`):
 
-Full walkthrough with copy-pasteable commands: **[docs/demo.md](docs/demo.md)**.
+- *What depends on `Context`?* → `get_dependencies` returns a blast radius of **196 files** —
+  ~0.75s cold, **~0.3s** warm (cache keyed on git HEAD).
+- *What breaks if cookie parsing is off by one char?* → `preflight` **executes** the covering
+  tests and returns **43 real failures across 6 files in ~1.8s**, each with the graph path from the
+  failing test back to the change.
+- *Is it safe to merge?* → `keel verdict` returns **BLOCK** (exit 2), naming the failing tests.
+
+Pointed at **[pallets/flask](https://github.com/pallets/flask)** (Python, 83 files, commit `36e4a82`)
+— the same graph, no config: `get_dependencies` on `src/flask/ctx.py` returns a blast radius of
+**69 files** in **~0.13s**. One language switch, zero setup.
 
 ## Status
 
-Phases 0–3 complete (substrate, flight simulator, team memory, trust layer); Phase 4 (compose)
-complete; Phase 5 (widen) underway — **Python** now works alongside TS/JS: graph analysis (imports,
-dependents, blast radius, test selection) and **execution** — `preflight` runs Python tests under
-pytest in the sandbox (reusing the repo's venv). Where pytest isn't installed, it says so honestly
-(`runner-unavailable`) rather than pretending. **Go** works too — graph analysis (imports target
-packages: an edge to every non-test `.go` file, resolved via `go.mod`/`go.work`) and **execution**
-(`preflight` runs `go test -json` per package in the sandbox; a compile error surfaces as a failure
-with the compiler output). **Java** works too — graph analysis (a package is one unit: same-package
-types couple with no import, incl. `src/test/java` ↔ `src/main/java`; plus **Spring DI edges** — an
-injected interface links to every implementation Spring wires in, which imports never show) and
-**execution** (`preflight` runs the selected classes under `mvn`/`gradle`, preferring the wrapper; a
-compile error surfaces as a failure). Working today:
+**Phases 0–5 complete** — substrate, flight simulator, team memory, trust layer, compose, and widen.
+Four languages, with **graph analysis** (imports, blast radius, test selection) and **execution**
+(preflight runs the covering tests; verdict gates on the result) stated honestly per language:
 
-- `get_dependencies` — import graph with transitive blast radius and symbol-level usage
-- `get_impact` — map a diff to its impacted subgraph (symbol-narrowed)
-- `select_tests` — the test files that cover a change, and what's left uncovered
-- `preflight` — validate a diff, apply it in an isolated worktree, and run the covering
-  tests under hard budget caps: **executed** pass/fail with traces and the graph path from
-  each failure back to the change
-- `why` — the decision behind a file or answer to a question, with source receipts (a PR, or an
-  ADR file). `keel ingest` populates it from **ADRs** (docs/adr, docs/decisions — local, no network)
-  and GitHub PRs; `keel mine` extracts decisions from PR threads; `keel decision add`/`reject` are
-  human overrides. Ranked human pin > ADR > mined.
-- `context` — a one-call briefing for a task: the candidate files, each with blast radius,
-  covering tests, recent history, linked decisions, and owners, plus rolled-up suggested tests
-  and risk flags (uncovered / high-blast-radius / protected-path / top-hotspot). Composition
-  only, no LLM calls
-- `suggest_reviewers` — who should review a change, ranked by recency-weighted authorship of the
-  files it touches (from commit + PR history), excluding bots and the change's own author
-- `flaky_tests` — tests CI has proven non-deterministic (passed and failed on the *same* commit),
-  from JUnit reports ingested by `keel ci`; the verdict discounts a flaky-only sim failure to a
-  warn instead of blocking on it
-- `verdict` — a machine-checkable **pass | warn | block** on a change, composing blast
-  radius, the executed sim, coverage, affected decisions, and **architectural import rules**
-  (`forbiddenImports`: a change that introduces or retains a forbidden `from`→`to` edge blocks,
-  naming the exact edge) against `keel.policy.json`. Also runs from the shell as `keel verdict`:
-  exit codes for CI, `--hook` to gate Claude Code
-  ([recipes/claude-code-hook.md](recipes/claude-code-hook.md)), and `--github-check` to post
-  the verdict as a GitHub check on every PR ([recipes/github-check.md](recipes/github-check.md)).
-  `keel report` gives repo-wide reports: `--arch` lists import-rule violations (adopt rules on a
-  legacy repo), `--hotspots` ranks files by risk = churn × blast radius × coverage gap
-- `get_history` — git history for any path
-- `keel workspace` — **one dependency graph spanning several repos**. A `keel.workspace.json` lists
-  member repos; keel merges their graphs and adds cross-repo edges (a shared package imported by
-  name resolves to the sibling repo that publishes it — TS by package.json name, Python/Go by the
-  sibling's own resolver), so blast radius crosses repo boundaries. `keel workspace impact
-  shared::src/index.ts` shows the services in other repos a change would affect.
+| Language | Graph analysis | Execution (preflight / verdict) |
+|---|---|---|
+| **TypeScript / JavaScript** | TS compiler API: imports, tsconfig path aliases, npm workspaces, symbol-level usage | vitest / jest / `node --test` |
+| **Python** | tree-sitter: absolute/relative/star imports, `src/` layouts, namespace packages | `pytest` (reuses the repo's venv); survives broken conftests |
+| **Go** | tree-sitter: a package is one compilation unit; `go.mod` / `go.work` resolution | `go test -json` per package; a compile error is an executed failure |
+| **Java** | tree-sitter: a package is one unit (incl. `src/test` ↔ `src/main`); **Spring DI edges** (an injected interface → every impl Spring wires in) | `mvn` / `gradle`, preferring the repo wrapper; Surefire/Gradle XML |
 
-See [docs/roadmap.md](docs/roadmap.md) for what's shipped and next.
+When a runner or toolchain isn't available, Keel says so (`runner-unavailable` / `environment-error`)
+rather than pretending it passed. Cross-repo workspaces span all four languages at the graph/impact
+layer; execution stays single-repo.
+
+## Tools
+
+MCP tools an agent calls (zod-validated input, structured JSON out, errors returned as data):
+
+| Tool | Answers | Backed by |
+|---|---|---|
+| `get_dependencies` | what imports this / what it imports / full blast radius / symbol-level usage | static graph |
+| `get_impact` | a diff → its impacted subgraph (symbol-narrowed) | static graph |
+| `select_tests` | the test files covering a change, and what's left uncovered | static graph |
+| `preflight` | apply the diff in a worktree, run the covering tests → **executed** pass/fail with traces + graph path | sandboxed execution |
+| `verdict` | `pass \| warn \| block`, each reason naming its rule + fact (blast radius, sim, coverage, decisions, `forbiddenImports`) | policy eval |
+| `why` | the decision behind a file or question, with PR/ADR receipts | decision index |
+| `context` | one-call task briefing: candidate files + blast radius, tests, decisions, owners, risks | composition |
+| `suggest_reviewers` | who should review a change, by recency-weighted authorship (bots excluded) | event log |
+| `flaky_tests` | tests CI proved non-deterministic (passed *and* failed on one commit) | CI reports |
+| `get_history` | git history for a path — the raw material for "why" | git |
+| `workspace_impact` | cross-repo blast radius (only when a `keel.workspace.json` is present) | workspace graph |
+
+CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>`):
+
+| Command | Does |
+|---|---|
+| `serve` (default) | start the MCP server over stdio |
+| `init` | register keel in this repo's `.mcp.json` |
+| `ingest` | ADRs (docs/adr, docs/decisions — local) + GitHub PRs into the event log |
+| `mine` | extract decision records from ingested PR threads (offline model only) |
+| `decision` | record a human decision (`add`) or reject a mined one |
+| `ci` | ingest JUnit reports (for flaky-test detection) |
+| `verdict` | `pass/warn/block` a change; exit codes for CI, `--hook`, `--github-check` |
+| `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
+| `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
 
 ## Quick start
 
-Requires Node ≥ 22. In the repo you want Keel to understand:
+Requires Node ≥ 22.13. In the repo you want Keel to understand:
 
 ```bash
 npx -y @tensorgreed/keel init   # registers keel in this repo's .mcp.json
 ```
 
-Restart Claude Code (or your MCP client), then ask things like *"what's the blast radius of
-changing src/config.ts?"* — it will call Keel and answer from the graph. `keel init` detects
-whether the `keel` binary is on your PATH and otherwise wires the config to run via `npx`, so
-there's nothing to install globally.
+Restart Claude Code (or your MCP client), then ask *"what's the blast radius of changing
+src/config.ts?"* — it calls Keel and answers from the graph. `init` wires the config to run via
+`npx` if the `keel` binary isn't on your PATH, so there's nothing to install globally.
 
-### From source (contributors, or before the npm release)
+Optional, progressive enrichment (never prerequisites): `keel ingest` + `keel mine` populate `why`;
+a `keel.policy.json` tightens `verdict`; a `keel.workspace.json` turns on cross-repo analysis.
+
+## How it compares
+
+Code-search and context tools (grep, embeddings, RAG retrievers) return **text** — snippets that
+*look* relevant. Keel returns **facts and executed results**:
+
+- **Deterministic** — the graph, impact, and verdict are static analysis and policy evaluation, not
+  an LLM's opinion; the same input always gives the same answer, and you can audit why.
+- **Executed** — when Keel says a change breaks something, it's because it *ran the test and it
+  failed*, with the trace and the import path back to your change. Proof over prediction.
+- **Local-first** — no flagship-model calls server-side, ever; Keel hands compact facts to your
+  agent and lets *it* reason. Everything works with nothing but a git clone; connectors (GitHub, CI)
+  are enrichment. Your code never leaves your machine for Keel to do its job.
+
+## From source
 
 ```bash
-git clone https://github.com/TensorGreed/keel.git
-cd keel
-npm install
-npm run build
-npm test
+git clone https://github.com/TensorGreed/keel.git && cd keel
+npm install && npm run build && npm test
 node dist/index.js init --command "node ./dist/index.js"   # point a repo at this build
 ```
 
@@ -113,36 +129,13 @@ This repo dogfoods itself: its own `.mcp.json`, `keel.policy.json`, and a `verdi
 
 ## Releasing
 
-Releases publish to npm from CI via **npm trusted publishing** (OIDC) — no npm token is ever
-stored as a secret. [`.github/workflows/release.yml`](.github/workflows/release.yml) fires on a
-`v*` tag: it installs, builds, runs the full test suite, then `npm publish --provenance` (the
-provenance attestation is signed with GitHub's OIDC identity).
-
-**One-time setup** (a maintainer, once):
-
-1. **Create the package.** Trusted publishing is configured on an existing package, so publish
-   the first version manually from a maintainer's machine: `npm publish --access public` (this
-   is the manual `0.1.0` step). Every release after this is automated.
-2. **Register the trusted publisher** on [npmjs.com](https://www.npmjs.com): open the
-   `@tensorgreed/keel` package → **Settings → Trusted Publishing → Add GitHub Actions** and set
-   - Organization / repository: `TensorGreed/keel`
-   - Workflow filename: `release.yml`
-
-   No secret is added to the GitHub repo — the `id-token: write` permission in the workflow is all
-   that's needed.
-
-**To cut a release:** bump `version` in `package.json`, commit, then tag and push:
-
-```bash
-git tag v0.1.1
-git push origin v0.1.1
-```
-
-CI takes it from there. (`prepublishOnly` re-runs build + tests as a final guard before publish.)
+Releases publish to npm from CI via **trusted publishing** (OIDC — no npm token stored). A `v*` tag
+fires [`.github/workflows/release.yml`](.github/workflows/release.yml): install, build, test, then
+`npm publish --provenance`. To cut one: bump `version` in `package.json`, commit, `git tag v0.1.1 &&
+git push origin v0.1.1`.
 
 ## Principles
 
-No flagship-model calls server-side, ever — Keel returns compact facts and lets the
-caller's agent do the reasoning. Deterministic core: static analysis, ETL, and executed
-tests, never LLM guesses. Repo-only value first: everything works with nothing but a
-git clone. Details in [CLAUDE.md](CLAUDE.md).
+No flagship-model calls server-side, ever. Deterministic core: static analysis, ETL, and executed
+tests — never LLM guesses. Repo-only value first; connectors are progressive enrichment. Proof over
+prediction. Details in [CLAUDE.md](CLAUDE.md).
