@@ -88,6 +88,8 @@ export async function runWorkspace(argv: string[]): Promise<number> {
     return 1;
   }
   const graph = await buildWorkspaceGraph(cfg);
+  // Surface version skew once per invocation, whatever the subcommand (see workspace/skew.ts).
+  for (const w of graph.warnings) warn(w);
 
   if (sub === undefined) return summarize(graph);
   if (sub === "impact" || sub === "deps") {

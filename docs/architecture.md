@@ -109,8 +109,23 @@ against that repo's roots/modules exactly as an in-repo import would, so the sib
 matches a Python publisher. Blast radius and impact then cross repo boundaries — changing a shared
 library's file shows the services in other repos it affects. Deterministic, no model calls; Java
 cross-repo (published jars → artifact coordinates) is out of scope for this pass. Scope boundary:
-this is the graph/impact layer — **execution (the sandbox), decisions, and the MCP tools remain
-single-repo**; the workspace graph is queried through the `keel workspace` CLI.
+this is the graph/impact layer — **execution (the sandbox), decisions, and the write/verify MCP tools
+remain single-repo**. The workspace graph is read through the `keel workspace` CLI and one read-only
+MCP tool, `workspace_impact` (registered only when a `keel.workspace.json` sits at or above
+`KEEL_REPO`); its output says plainly that a cross-repo dependent is a candidate to check, not an
+executed result.
+
+**Version-skew caveat — the graph describes checkouts, not published versions.** The workspace graph
+is built from the repos *as checked out*: a cross-repo edge points at the sibling's source on disk.
+At runtime a service consumes the *published* version its manifest resolves to, which may differ from
+that checkout. keel doesn't paper over this. It surfaces the gap cheaply (TS/JS for now, no semver
+dependency): when a member declares a dependency on a package a sibling publishes and the sibling's
+checked-out `version` doesn't satisfy the constraint (a loose `^`/`~`/exact check; `workspace:`/
+`file:` protocols and comparator ranges are treated as intending the checkout, so no false alarm),
+`keel workspace` and `workspace_impact` emit a one-line warning — "the checkout is 2.x but this pins
+^1; the graph reflects the checkout, not the version resolved at runtime." The graph is still the
+right thing to reason about locally (it's the code you'd get from these checkouts); the warning keeps
+that honest about production.
 
 **Execution now covers TS/JS, Python, Go, and Java.** Graph analysis, impact, and test selection are
 language-agnostic (`test_*.py` / `*_test.py` / `tests/` for Python; `*_test.go` for Go; the test

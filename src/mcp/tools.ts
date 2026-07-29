@@ -433,6 +433,8 @@ function registerWorkspaceImpact(server: McpServer, repoRoot: string): void {
           // the cross-repo edges that carry the impact across a boundary (both endpoints impacted)
           crossEdges: graph.crossEdges.filter((e) => impacted.has(e.from) && impacted.has(e.to)),
           members: graph.members.map((m) => m.name),
+          // the graph reflects the CHECKOUTS, not the versions resolved at runtime — flag any skew
+          ...(graph.warnings.length > 0 ? { warnings: graph.warnings } : {}),
         });
       } catch (err) {
         return json({ error: `workspace_impact failed: ${(err as Error).message}` });

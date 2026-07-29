@@ -24,6 +24,7 @@ import type { FileGraph } from "../graph/dependencies.js";
 import type { LanguageScanner } from "../graph/scanner.js";
 import { createScanners } from "../graph/scanners.js";
 import type { WorkspaceConfig, WorkspaceMember } from "./config.js";
+import { versionSkewWarnings } from "./skew.js";
 
 const SEP = "::";
 /** A workspace-qualified file key: `<member name>::<repo-relative path>`. */
@@ -45,6 +46,8 @@ export interface WorkspaceGraph {
   files: string[];
   /** the cross-repo edges only, for reporting */
   crossEdges: CrossEdge[];
+  /** version-skew notes: a member's checkout doesn't satisfy a sibling's declared constraint */
+  warnings: string[];
 }
 
 // --- TS package publishing --------------------------------------------------
@@ -260,6 +263,7 @@ export async function buildWorkspaceGraph(config: WorkspaceConfig): Promise<Work
     importedBy: invert(imports),
     files: files.sort(),
     crossEdges,
+    warnings: versionSkewWarnings(config.members),
   };
 }
 
