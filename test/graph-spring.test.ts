@@ -85,3 +85,19 @@ describe("spring DI edges", () => {
     expect(reportFor(plain, `${M}/util/Helper.java`).dependencies).toEqual([`${M}/util/Constants.java`]);
   });
 });
+
+describe("spring DI — candidates don't cross module boundaries", () => {
+  // Two modules each declare the SAME types (a `Gateway` interface + a `StripeGateway` @Component
+  // impl). An injected interface must resolve only to its own module's impl, not the sibling's.
+  it("scopes an injected interface's implementations to the injector's module", () => {
+    const g = buildFileGraph(path.join(fixtures, "java-spring-multi"));
+    const checkoutA = "moduleA/src/main/java/com/example/svc/Checkout.java";
+    const implA = "moduleA/src/main/java/com/example/impl/StripeGateway.java";
+    const implB = "moduleB/src/main/java/com/example/impl/StripeGateway.java";
+    const depsA = reportFor(g, checkoutA).dependencies;
+    expect(depsA).toContain(implA); // same-module DI candidate — kept
+    expect(depsA).not.toContain(implB); // the foreign module's identically-named impl — not a candidate
+    // Symmetric: moduleB's injector reaches only moduleB's impl.
+    expect(reportFor(g, "moduleB/src/main/java/com/example/svc/Checkout.java").dependencies).not.toContain(implA);
+  });
+});

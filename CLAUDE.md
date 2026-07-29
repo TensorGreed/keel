@@ -64,7 +64,8 @@ src/
                     API), python-scanner.ts (web-tree-sitter WASM, grammar in graph/wasm/),
                     scanners.ts (registry by extension + async init), dependencies.ts (walk +
                     resolve + assemble), cache.ts (incremental, git-HEAD-keyed graph cache),
-                    spring.ts (Java DI edges), go-scanner.ts / java-scanner.ts (WASM scanners)
+                    spring.ts (Java DI edges), go-scanner.ts / java-scanner.ts (WASM scanners),
+                    java-modules.ts (Java module scoping for adjacency + resolution + DI)
   workspace/        Cross-repo graph: config.ts (keel.workspace.json), graph.ts (merge member
                     graphs, namespace as name::path, add cross-repo edges), cli.ts (`keel
                     workspace`). Graph/impact layer only — execution/decisions/tools stay single-repo
@@ -245,13 +246,18 @@ message. Runner dispatch in `runSandbox` is
 the same seam). The defining quirk: same-package Java types reference each other with **no import
 statement** (a `FooTest` under `src/test/java` exercising `Foo` under `src/main/java`, same
 package), so an import-only graph would miss intra-package coupling entirely. keel models a Java
-package as one unit like a Go package: each file emits a synthetic edge to every other file with the
-same package name across all source roots (mutual adjacency, package-based so the main↔test link
-survives). Real imports on top: single-type (`import a.b.C` → `C.java`), on-demand (`import a.b.*` →
-every file of the package → `*`), and static imports (member → its declaring type). Exports are the
-public top-level types (class/interface/enum/record/annotation). Resolution maps package dirs under
-discovered source roots (Maven/Gradle `src/main/java`, `src/test/java`; multi-module via pom.xml
-`<modules>` + settings.gradle `include(...)`, extracted at the regex level — no XML/DSL dependency).
+package as one unit like a Go package — but scoped to the build **module** (`graph/java-modules.ts`):
+each file emits a synthetic edge to every other file with the same package name **in the same
+module** (mutual adjacency; the main↔test link survives because a module's main/test roots share the
+scope). Module scoping is essential — a samples monorepo where 50 unrelated projects all declare
+`package com.example` would otherwise fuse into one 170-file unit (a real cold-start finding). A
+file's module is the nearest ancestor dir with a build file (pom.xml / build.gradle(.kts) /
+settings.gradle(.kts)); else the nearest source-root ancestor (dir holding src/main/java|src/test/
+java); else its own dir. Real imports on top, **also module-scoped**: single-type (`import a.b.C` →
+`C.java`), on-demand (`import a.b.*` → every file of the package → `*`), static imports (member → its
+declaring type). A cross-module dep is real but arrives via declared dependencies later, not by
+walking every source root. Exports are the public top-level types (class/interface/enum/record/
+annotation).
 **Java execution** is done too (`simulate/sandbox.ts`): Java tests run per *class* — the selected
 files map to FQ class names and run in one `mvn -Dtest=A,B test` / `gradle test --tests A ...` pass,
 preferring a repo wrapper (`./mvnw`/`./gradlew`) over a global install. Results come from the
@@ -271,7 +277,9 @@ edges each injector to every satisfying bean — an interface's impls, a concret
 matching bean (matched against its default decapitalized name, its stereotype value like
 `@Service("name")`, or a class-level `@Qualifier`); a qualifier matching nothing keel can see is
 ignored rather than dropping the edge. Deterministic; resolution is by simple type name (a
-conservative over-approximation — a collision only *adds* edges, safe for blast radius). These edges
+conservative over-approximation — a same-module collision only *adds* edges, safe for blast radius),
+and the candidate pool is scoped to the injector's **module** so two same-named beans in different
+modules never become each other's candidates (same boundary as adjacency). These edges
 are cross-file (an impl reroutes an injector elsewhere), so they compute only in a full
 `buildFileGraph`; any `.java` change forces a full rebuild rather than an incremental update, keeping
 the cache correct. Graph format bumped to v3 (a v2 cache lacked DI edges).

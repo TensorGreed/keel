@@ -29,6 +29,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Node } from "web-tree-sitter";
 import { parseJava } from "./java-scanner.js";
+import { discoverJavaLayout, moduleOf } from "./java-modules.js";
 import { WHOLE_MODULE } from "./scanner.js";
 
 /** Class annotations that mark a Spring bean (a candidate injection target and injector). */
@@ -55,10 +56,13 @@ interface InjectionPoint {
   types: string[];
   qualifier?: string;
 }
-/** A bean that can satisfy an injection: its file and the names it answers to (for @Qualifier). */
+/** A bean that can satisfy an injection: its file, the names it answers to (for @Qualifier), and the
+ *  module it lives in (candidates are scoped to the injector's module — a same-named type in another
+ *  module isn't a candidate; see java-modules.ts). */
 interface BeanRef {
   file: string;
   names: string[];
+  module: string;
 }
 interface JavaTypeMeta {
   file: string;
@@ -284,10 +288,23 @@ export function applySpringEdges(
     all.push(...extractTypes(rel, content));
   }
 
+  // The module each Java file belongs to — candidates are matched within a module, so two same-named
+  // types in different modules don't become each other's DI candidates (java-modules.ts).
+  const layout = discoverJavaLayout(root);
+  const moduleByFile = new Map<string, string>();
+  const moduleFor = (rel: string): string => {
+    let m = moduleByFile.get(rel);
+    if (m === undefined) {
+      m = moduleOf(layout, path.resolve(root, rel)).root;
+      moduleByFile.set(rel, m);
+    }
+    return m;
+  };
+
   // Repo-wide bean index: a simple type name → the beans that satisfy an injection of it. A concrete
   // bean class contributes its own name; a bean contributes every interface/superclass it implements
   // (so an interface injection resolves to its implementations); an @Bean factory contributes its
-  // produced types. Each entry carries the bean's names, for @Qualifier narrowing.
+  // produced types. Each entry carries the bean's names (for @Qualifier) and module (for scoping).
   const beanIndex = new Map<string, BeanRef[]>();
   const add = (typeName: string, ref: BeanRef): void => {
     let list = beanIndex.get(typeName);
@@ -299,10 +316,11 @@ export function applySpringEdges(
   };
   for (const t of all) {
     if (!t.isBean) continue;
-    const self: BeanRef = { file: t.file, names: t.beanNames };
+    const module = moduleFor(t.file);
+    const self: BeanRef = { file: t.file, names: t.beanNames, module };
     add(t.name, self);
     for (const s of t.supers) add(s, self);
-    for (const p of t.produces) add(p.type, { file: t.file, names: p.names });
+    for (const p of t.produces) add(p.type, { file: t.file, names: p.names, module });
   }
 
   const addEdge = (from: string, to: string): void => {
@@ -328,9 +346,14 @@ export function applySpringEdges(
 
   for (const t of all) {
     if (!t.isBean) continue;
+    const injectorModule = moduleFor(t.file);
     for (const ip of t.injections) {
       const candidates: BeanRef[] = [];
-      for (const type of ip.types) candidates.push(...(beanIndex.get(type) ?? []));
+      // Only beans in the SAME module can satisfy the injection — a same-named type in a foreign
+      // module (a samples monorepo, a sibling service) is not a candidate.
+      for (const type of ip.types) {
+        for (const ref of beanIndex.get(type) ?? []) if (ref.module === injectorModule) candidates.push(ref);
+      }
       // @Qualifier narrows to the matching bean(s). If it matches nothing here (the qualifier names
       // a bean keel can't see), keep all candidates rather than drop the edge — stay conservative.
       let chosen = candidates;

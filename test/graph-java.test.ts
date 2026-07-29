@@ -71,14 +71,54 @@ describe("java: single-module Maven, import forms + same-package adjacency", () 
   });
 });
 
-describe("java: two-module Maven build", () => {
-  it("resolves a cross-module import via the other module's source root", () => {
-    const g = buildFileGraph(path.join(fixtures, "java-maven-multi"));
+describe("java: two-module Maven build — scoping to the module, not the repo", () => {
+  let g: FileGraph;
+  beforeAll(() => {
+    g = buildFileGraph(path.join(fixtures, "java-maven-multi"));
+  });
+
+  it("does NOT resolve a cross-module import (each child module is its own scope)", () => {
+    // web/Server imports com.example.core.Engine, but core is a sibling module — resolving it here
+    // would be the same over-reach that fuses unrelated same-package projects. True cross-module
+    // deps arrive later via the module's declared dependencies; for now, no edge.
     const server = "web/src/main/java/com/example/web/Server.java";
     const engine = "core/src/main/java/com/example/core/Engine.java";
-    expect(reportFor(g, server).dependencies).toEqual([engine]);
-    expect(reportFor(g, engine).dependents).toEqual([server]);
+    expect(reportFor(g, server).dependencies).not.toContain(engine);
+    expect(reportFor(g, engine).dependents).toEqual([]);
   });
+
+  it("still fuses same-package siblings WITHIN a module (adjacency intact)", () => {
+    // Server and Router are both com.example.web in the web module — same-package, no import.
+    const server = "web/src/main/java/com/example/web/Server.java";
+    const router = "web/src/main/java/com/example/web/Router.java";
+    expect(reportFor(g, server).dependencies).toEqual([router]);
+    expect(reportFor(g, router).dependencies).toEqual([server]);
+  });
+});
+
+describe("java: samples monorepo — a shared package name across unrelated projects is not fused", () => {
+  // The CipherTrust cold-start finding: 50+ standalone samples all declare `package com.example`.
+  // Repo-global adjacency fused them into one 170-file unit. Adjacency is now scoped to the module.
+  for (const [label, fixture] of [
+    ["no build files (source-root scope)", "java-samples-nobuild"],
+    ["with build files (build-file scope)", "java-samples-build"],
+  ] as const) {
+    it(`keeps two same-package projects separate — ${label}`, () => {
+      const g = buildFileGraph(path.join(fixtures, fixture));
+      const appA = "projectA/src/main/java/com/example/AppA.java";
+      const helperA = "projectA/src/main/java/com/example/HelperA.java";
+      const appB = "projectB/src/main/java/com/example/AppB.java";
+      const helperB = "projectB/src/main/java/com/example/HelperB.java";
+      // Same-package adjacency still works WITHIN a project.
+      expect(reportFor(g, appA).dependencies).toEqual([helperA]);
+      // But it does NOT reach into the other project's `com.example`.
+      expect(reportFor(g, appA).dependencies).not.toContain(appB);
+      expect(reportFor(g, appA).dependencies).not.toContain(helperB);
+      // No file in project A carries a project-B file in its blast radius (and vice-versa).
+      expect(transitiveDependents(g, helperA).some((f) => f.startsWith("projectB/"))).toBe(false);
+      expect(transitiveDependents(g, helperB).some((f) => f.startsWith("projectA/"))).toBe(false);
+    });
+  }
 });
 
 describe("java: Gradle single-module", () => {

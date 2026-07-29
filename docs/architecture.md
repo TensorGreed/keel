@@ -49,22 +49,27 @@ package but imports nothing from it, so the scanner adds a synthetic edge to the
 non-test files; a black-box `pkg_test` file connects through its explicit import. Aliased and
 dot-imports pull the whole package (`*`); a blank import (`_`) is a side-effect-only edge.
 
-**Java's same-package coupling is invisible to imports — so a package is one unit, like Go.**
-In Java, types in the same package reference each other with *no import statement*, and the most
-common instance is a `FooTest` in `src/test/java/...` exercising `Foo` in `src/main/java/...` under
-the same package. An import-only graph would miss all of this — precisely the intra-package
-coupling a change most needs to know about. So keel models a Java package as one unit: every
-`.java` file emits a synthetic edge to every other file declaring the **same package name**, across
-*all* source roots (mutual adjacency, package-based not directory-based, so the main↔test link
-survives the split source layout). On top of that, real import edges: a single-type import
-(`import a.b.C`) resolves to the one file `C.java` (the file↔public-type convention); an on-demand
-import (`import a.b.*`) resolves to every file of that package (`*`); a static import resolves to
-its member's declaring type. Exports are the public top-level types. Resolution maps a package to a
-directory under a discovered source root — the Maven/Gradle `src/main/java` and `src/test/java`
-convention, with multi-module builds discovered from pom.xml `<modules>` and settings.gradle
-`include(...)` (extracted at the regex level; keel takes no XML or build-DSL dependency). Modelling
-same-package files as one unit is honest about what Java source expresses, rather than faking a
-file-level precision the language doesn't give at the package boundary.
+**Java's same-package coupling is invisible to imports — so a package is one unit, like Go, but
+scoped to the build MODULE.** In Java, types in the same package reference each other with *no import
+statement*, and the most common instance is a `FooTest` in `src/test/java/...` exercising `Foo` in
+`src/main/java/...` under the same package. An import-only graph would miss all of this — precisely
+the intra-package coupling a change most needs to know about. So keel models a Java package as one
+unit: every `.java` file emits a synthetic edge to every other file declaring the **same package
+name** — but only *within the same module*. Modules matter because package names aren't globally
+unique: a samples monorepo can have 50 standalone projects all declaring `package com.example`, and
+fusing them by package name alone produces a 170-file blast radius spanning unrelated projects (a
+real cold-start finding). A file's **module** is the nearest ancestor directory holding a build file
+(`pom.xml` / `build.gradle(.kts)` / `settings.gradle(.kts)`); failing that, the nearest source-root
+ancestor (the dir containing `src/main/java` or `src/test/java` — so a module's main and test roots
+share one scope, and the main↔test link survives); and failing that, the file's own directory
+(`src/graph/java-modules.ts`). Same-package adjacency, import resolution (a single-type
+`import a.b.C` → `C.java`; an on-demand `import a.b.*` → every file of that package → `*`; a static
+import → its member's type), and the Spring DI candidate pool are **all scoped to the module**.
+Exports are the public top-level types. A genuine cross-module dependency is real, but it arrives
+through imports plus the module's *declared* dependencies (a later pass) — never by walking every
+source root, which is what over-reached and fused the samples. Modelling a package as one unit within
+a module is honest about what Java source expresses without pretending a shared package name means a
+shared codebase.
 
 **Spring DI edges — the runtime wiring imports can't express** (`src/graph/spring.ts`). Spring's
 most valuable coupling is invisible to imports: a `@Service` that injects a `PaymentGateway`
@@ -79,10 +84,12 @@ candidates to the bean whose name matches — a bean's names being its default (
 name, per `Introspector.decapitalize`), its stereotype value (`@Service("name")`), or a class-level
 `@Qualifier`; a qualifier that matches no bean keel can see is ignored (keep all candidates) rather
 than dropping the edge. It's deterministic static analysis, never a guess (principle 2). Resolution
-is by simple type name — a deliberate, conservative over-approximation: a cross-package name
-collision can only *add* edges, and blast radius is already a safe over-approximation (a superset of
-tests is fine; a missed one is not). Qualifier narrowing only *removes* candidates once a concrete
-match is found, so it never leaves an injection with no edge. Because these edges are inherently cross-file (an
+is by simple type name — a deliberate, conservative over-approximation: a same-package name collision
+within a module can only *add* edges, and blast radius is already a safe over-approximation (a
+superset of tests is fine; a missed one is not). The candidate pool is scoped to the injector's
+**module** (the same boundary as same-package adjacency), so two identically-named beans in different
+modules never become each other's candidates. Qualifier narrowing only *removes* candidates once a
+concrete match is found, so it never leaves an injection with no edge. Because these edges are inherently cross-file (an
 impl in file A reroutes an injector in file B), the pass runs only in a full `buildFileGraph`; any
 `.java` change forces a full rebuild rather than an incremental update, which keeps the cache
 provably correct (see `graph/cache.ts`). Bean field/setter *interface* injection is where this earns
