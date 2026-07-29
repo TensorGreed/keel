@@ -6,29 +6,48 @@
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
 import { mineDecisions } from "./mine.js";
-import { AnthropicModel, OllamaModel, type DecisionModel } from "./model.js";
+import { AnthropicModel, OllamaModel, OpenAICompatibleModel, type DecisionModel } from "./model.js";
 import { embedDecisions, OllamaEmbeddingModel } from "../retrieval/embed.js";
 
 const MINE_HELP = `keel mine — extract decision records from ingested PR threads
 
-Usage: keel mine [--model ollama|anthropic] [--limit N] [--no-embed]
+Usage: keel mine [--model ollama|anthropic|openai] [--limit N] [--no-embed]
 
-  --model ollama      use a local Ollama model (default)
-  --model anthropic   use a Haiku-class model via the Anthropic API (needs ANTHROPIC_API_KEY)
+  --model ollama      use a local Ollama model (default — free, private)
+  --model anthropic   a Haiku-class model via the Anthropic API (needs ANTHROPIC_API_KEY)
+  --model openai      any OpenAI-compatible /chat/completions endpoint (needs OPENAI_API_KEY
+                      and KEEL_MINER_MODEL; KEEL_OPENAI_BASE_URL selects the provider)
   --limit N           cap PRs mined this run (newest first, default 200)
   --no-embed          skip computing embeddings for semantic retrieval
 
 The extraction model name is KEEL_MINER_MODEL (default llama3.2 for ollama, claude-haiku-4-5
-for anthropic); embeddings use a local model, KEEL_EMBED_MODEL (default nomic-embed-text).
-Ollama's base URL is KEEL_OLLAMA_URL (default http://localhost:11434). Run 'keel ingest'
-first to populate PR threads. Safe to re-run — already-mined/embedded records are skipped.`;
+for anthropic; REQUIRED for openai — no default). Ollama's base URL is KEEL_OLLAMA_URL
+(default http://localhost:11434); the openai base URL is KEEL_OPENAI_BASE_URL (default
+https://api.openai.com/v1). Embeddings use a local model, KEEL_EMBED_MODEL (default
+nomic-embed-text).
+
+  DeepSeek example (OpenAI-compatible):
+    OPENAI_API_KEY=sk-... KEEL_OPENAI_BASE_URL=https://api.deepseek.com/v1 \\
+    KEEL_MINER_MODEL=deepseek-chat  keel mine --model openai
+
+Local (ollama) is the default and the only provider that runs for free; cloud providers
+(anthropic, openai) run only in this offline pipeline, never the MCP server. A large cloud
+run prints its PR count and a rough token estimate before starting. Run 'keel ingest' first
+to populate PR threads. Safe to re-run — already-mined/embedded records are skipped.`;
+
+/** Providers that call a paid, remote API (as opposed to a free local model). */
+const CLOUD_PROVIDERS = new Set(["anthropic", "openai"]);
+/** Warn before a cloud run larger than this, so a bill is never a surprise (CLAUDE.md cost rules). */
+const CLOUD_WARN_THRESHOLD = 25;
+/** Very rough tokens per PR (prompt thread + JSON response) for the pre-run cost estimate. */
+const EST_TOKENS_PER_PR = 2000;
 
 function warn(message: string): void {
   process.stderr.write(`[keel] ${message}\n`);
 }
 
-/** Build the model from flags/env, or return an error message. */
-function selectModel(provider: string): DecisionModel | { error: string } {
+/** Build the model from flags/env, or return an error message. Exported for tests. */
+export function selectModel(provider: string): DecisionModel | { error: string } {
   const modelName = process.env["KEEL_MINER_MODEL"];
   if (provider === "ollama") {
     const url = process.env["KEEL_OLLAMA_URL"];
@@ -39,7 +58,16 @@ function selectModel(provider: string): DecisionModel | { error: string } {
     if (!key) return { error: "ANTHROPIC_API_KEY is not set (required for --model anthropic)" };
     return new AnthropicModel(key, modelName);
   }
-  return { error: `unknown --model "${provider}" (use ollama or anthropic)` };
+  if (provider === "openai") {
+    const key = process.env["OPENAI_API_KEY"];
+    if (!key) return { error: "OPENAI_API_KEY is not set (required for --model openai)" };
+    if (!modelName) {
+      return { error: "KEEL_MINER_MODEL is required for --model openai (no default) — e.g. deepseek-chat, gpt-4o-mini" };
+    }
+    // KEEL_OPENAI_BASE_URL picks the provider; undefined falls back to the OpenAI default.
+    return new OpenAICompatibleModel(modelName, key, process.env["KEEL_OPENAI_BASE_URL"]);
+  }
+  return { error: `unknown --model "${provider}" (use ollama, anthropic, or openai)` };
 }
 
 export async function runMine(argv: string[]): Promise<number> {
@@ -85,11 +113,22 @@ export async function runMine(argv: string[]): Promise<number> {
     return 1;
   }
 
+  const isCloud = CLOUD_PROVIDERS.has(provider);
   const repoRoot = path.resolve(process.env["KEEL_REPO"] ?? process.cwd());
   const store = new SqliteEventStore(path.join(repoRoot, ".keel", "events.db"));
   try {
     warn(`mining decisions with ${model.name}…`);
-    const result = await mineDecisions(store, model, limit !== undefined ? { limit } : {});
+    const result = await mineDecisions(store, model, {
+      ...(limit !== undefined ? { limit } : {}),
+      // Cost guard: before the first paid API call of a large cloud run, print the size + a rough
+      // token estimate to stderr, so nobody discovers a bill by surprise.
+      onPlan: (count) => {
+        if (isCloud && count > CLOUD_WARN_THRESHOLD) {
+          const tokens = (count * EST_TOKENS_PER_PR).toLocaleString();
+          warn(`about to mine ${count} PR(s) via ${model.name} (a paid API) — rough estimate ~${tokens} tokens; Ctrl-C now to abort`);
+        }
+      },
+    });
     console.log(
       `[keel] mined ${result.mined} decision(s) from ${result.total} PR(s) ` +
         `(${result.skipped} already mined, ${result.noDecision} no decision, ${result.errors} error(s)) via ${result.model}`,

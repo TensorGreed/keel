@@ -103,6 +103,32 @@ src/config.ts?"* — it calls Keel and answers from the graph. `init` wires the 
 Optional, progressive enrichment (never prerequisites): `keel ingest` + `keel mine` populate `why`;
 a `keel.policy.json` tightens `verdict`; a `keel.workspace.json` turns on cross-repo analysis.
 
+## Mining decisions — model providers
+
+`keel mine` extracts the "why" from ingested PR threads. It is the **only** part of Keel that calls a
+generative model, and it runs **offline** — never in the MCP server your agent talks to (a
+non-negotiable cost/privacy rule). Three interchangeable backends over `--model`:
+
+| Provider | Config | Cost |
+|---|---|---|
+| `ollama` (default) | `KEEL_MINER_MODEL` (default `llama3.2`), `KEEL_OLLAMA_URL` | **free, local, private** |
+| `anthropic` | `ANTHROPIC_API_KEY`; `KEEL_MINER_MODEL` (default `claude-haiku-4-5`) | paid API (Haiku-class) |
+| `openai` (OpenAI-compatible) | `OPENAI_API_KEY`; `KEEL_MINER_MODEL` (**required, no default**); `KEEL_OPENAI_BASE_URL` | paid API |
+
+The `openai` backend is any OpenAI-compatible `/chat/completions` endpoint — the base URL selects the
+provider, so one backend serves OpenAI, **DeepSeek**, Groq, Mistral, or a local LM Studio / vLLM:
+
+```bash
+OPENAI_API_KEY=sk-... KEEL_OPENAI_BASE_URL=https://api.deepseek.com/v1 \
+  KEEL_MINER_MODEL=deepseek-chat  keel mine --model openai
+```
+
+**Cost posture.** Local (`ollama`) is the default and the only backend that runs for free; a cloud
+provider is opt-in via `--model` and never has a silent model default. Before mining more than 25 PRs
+on a paid API, Keel prints the count and a rough token estimate to stderr so a bill is never a
+surprise, and an auth/rate-limit/5xx error stops cleanly, leaving those PRs unmarked so a re-run
+retries them.
+
 ## How it compares
 
 Code-search and context tools (grep, embeddings, RAG retrievers) return **text** — snippets that

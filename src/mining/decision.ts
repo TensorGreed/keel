@@ -63,15 +63,18 @@ export function parseDecision(output: string): DecisionRecord | { error: string 
   };
 }
 
-/** Extract the first balanced {...} object from text (handles ```json fences and prose). */
+/** Extract the first balanced {...} object from text (handles ```json fences, prose, and the
+ *  <think>…</think> scratchpad reasoning models like DeepSeek-R1 emit — which can itself contain
+ *  braces, so we strip it before scanning rather than grabbing JSON out of the model's reasoning). */
 export function extractJsonObject(text: string): string | null {
-  const start = text.indexOf("{");
+  const cleaned = text.replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, "");
+  const start = cleaned.indexOf("{");
   if (start === -1) return null;
   let depth = 0;
   let inString = false;
   let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const ch = text[i]!;
+  for (let i = start; i < cleaned.length; i++) {
+    const ch = cleaned[i]!;
     if (inString) {
       if (escaped) escaped = false;
       else if (ch === "\\") escaped = true;
@@ -82,7 +85,7 @@ export function extractJsonObject(text: string): string | null {
     else if (ch === "{") depth++;
     else if (ch === "}") {
       depth--;
-      if (depth === 0) return text.slice(start, i + 1);
+      if (depth === 0) return cleaned.slice(start, i + 1);
     }
   }
   return null;

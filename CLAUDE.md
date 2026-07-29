@@ -82,8 +82,10 @@ src/
   ci/               `keel ci`: ingest JUnit test reports into ci_run events (junit.ts parser,
                     ingest.ts ETL, cli.ts — no deps). Feeds flaky-test detection. No model calls.
   mining/           `keel mine`: extract decision records from PR threads (OFFLINE only).
-                    The one place model calls are allowed — Ollama or batch Haiku,
-                    injectable DecisionModel; never reached from the MCP server
+                    The one place model calls are allowed — Ollama (local, default), Anthropic
+                    (Haiku), or any OpenAI-compatible endpoint (KEEL_OPENAI_BASE_URL → DeepSeek/
+                    Groq/vLLM/…); injectable DecisionModel; never reached from the MCP server.
+                    Cloud runs > 25 PRs print a cost estimate first; local stays the default.
   retrieval/        Decision index: embed.ts (local embeddings, injectable),
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
                     composition — file links + semantic/keyword, human overrides, receipts)

@@ -115,6 +115,11 @@ describe("extractJsonObject", () => {
     expect(extractJsonObject('prefix {"x": "}"} suffix')).toBe('{"x": "}"}'); // brace inside a string
     expect(extractJsonObject("no object here")).toBeNull();
   });
+
+  it("strips a reasoning model's <think> scratchpad (which can contain braces) before scanning", () => {
+    // Without the strip, the first `{` is inside the think block → invalid JSON.
+    expect(extractJsonObject('<think>emit {summary, rationale} as JSON</think>\n{"a": 1}')).toBe('{"a": 1}');
+  });
 });
 
 // --- eval metric ------------------------------------------------------------

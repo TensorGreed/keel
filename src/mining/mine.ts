@@ -18,6 +18,9 @@ import { buildDecisionPrompt, type PrThread, type ThreadComment, type ThreadRevi
 export interface MineOptions {
   /** cap PRs mined this run (newest-updated first); default 200 */
   limit?: number;
+  /** called with the number of PRs about to be mined, BEFORE any model call — lets the CLI warn
+   *  about the cost of a large cloud run before a bill is incurred (see CLAUDE.md cost rules). */
+  onPlan?: (count: number) => void;
 }
 
 export interface MineResult {
@@ -151,6 +154,9 @@ export async function mineDecisions(
   // Newest-updated first, so the per-run cap keeps the freshest decisions.
   pending.sort((a, b) => prUpdatedAt(b).localeCompare(prUpdatedAt(a)));
   const toMine = pending.slice(0, Math.max(0, limit));
+
+  // Announce the plan before the first model call, so a cost guard can warn (CLAUDE.md cost rules).
+  options.onPlan?.(toMine.length);
 
   const events: KeelEvent[] = [];
   let minedCount = 0;

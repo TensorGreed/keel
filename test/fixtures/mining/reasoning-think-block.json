@@ -1,0 +1,34 @@
+{
+  "name": "reasoning model wraps JSON in a <think> block",
+  "pr": {
+    "number": 5,
+    "title": "Validate config with Zod at startup",
+    "body": "Parse and validate configuration with Zod when the process starts, so a bad value fails loudly at boot instead of at first use.",
+    "author": "carol",
+    "state": "closed",
+    "merged": true,
+    "url": "https://github.com/o/r/pull/5",
+    "files": ["src/config.ts"],
+    "reviews": [{ "author": "dan", "state": "APPROVED", "body": "Nice, fail-fast is the right call." }]
+  },
+  "comments": [
+    {
+      "id": 30,
+      "prNumber": 5,
+      "inReplyTo": null,
+      "path": "src/config.ts",
+      "diffHunk": "@@ const config = ConfigSchema.parse(raw)",
+      "body": "Why validate at startup rather than lazily?",
+      "author": "dan"
+    }
+  ],
+  "modelOutput": "<think>\nThe PR moves config parsing to Zod at process start. The author's rationale is fail-fast: a bad value should crash at boot, not at first use. I need to emit a JSON object shaped like {summary, rationale, alternatives, files, confidence}. Let me be careful with the braces here.\n</think>\n{\"hasDecision\": true, \"summary\": \"Validate configuration with Zod at startup\", \"rationale\": \"Fail fast: a bad config value should crash at boot rather than surface at first use\", \"alternatives\": [\"lazy validation at first use\"], \"files\": [\"src/config.ts\"], \"confidence\": \"high\"}",
+  "gold": {
+    "hasDecision": true,
+    "summary": "Validate configuration with Zod at startup",
+    "rationale": "Fail fast: a bad config value should crash at boot rather than surface at first use",
+    "alternatives": ["lazy validation at first use"],
+    "files": ["src/config.ts"],
+    "confidence": "high"
+  }
+}
