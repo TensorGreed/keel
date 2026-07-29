@@ -82,7 +82,10 @@ under a hard ~1s budget), and — only when there are hits — prints the top 3 
 It never errors, never blocks, and stays under budget: a hook that slows every prompt gets
 uninstalled, so silence is the default.
 
-Add it alongside the Stop hook in `.claude/settings.json`:
+**`keel init` installs this hook for you** (default on; `--no-hooks` to skip) — it merges the
+UserPromptSubmit entry into `.claude/settings.json` non-destructively, mirroring the launch command
+it wrote to `.mcp.json`. Add it by hand only if you skipped it, or want a specific command such as a
+local build. To place it alongside the Stop hook manually:
 
 ```json
 {

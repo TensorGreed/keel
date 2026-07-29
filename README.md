@@ -79,7 +79,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | Command | Does |
 |---|---|
 | `serve` (default) | start the MCP server over stdio |
-| `init` | register keel in this repo's `.mcp.json` |
+| `init` | register keel in `.mcp.json`, add CLAUDE.md guidance, install the prompt-context hook |
 | `ingest` | ADRs (docs/adr, docs/decisions — local) + GitHub PRs into the event log |
 | `mine` | extract decision records from ingested PR threads (offline model only) |
 | `decision` | record a human decision (`add`) or reject a mined one |

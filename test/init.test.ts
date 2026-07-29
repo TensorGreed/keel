@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { initMcpConfig, writeClaudeMdGuidance } from "../src/init.js";
+import { initMcpConfig, writeClaudeMdGuidance, writeSettingsHook } from "../src/init.js";
 
 let dir: string;
 
@@ -171,5 +171,85 @@ describe("keel init — CLAUDE.md agent guidance", () => {
     expect(md).toContain("## My own notes");
     expect(md).toContain("keep me.");
     expect(md).toBe(withTail); // nothing changed (the block was already current)
+  });
+});
+
+describe("keel init — prompt-context hook (.claude/settings.json)", () => {
+  const SETTINGS = (): string => path.join(dir, ".claude", "settings.json");
+  function readSettings(): Record<string, any> {
+    return JSON.parse(fs.readFileSync(SETTINGS(), "utf8"));
+  }
+  function promptContextCommands(s: Record<string, any>): string[] {
+    return (s.hooks?.UserPromptSubmit ?? [])
+      .flatMap((g: any) => g.hooks ?? [])
+      .map((h: any) => h.command)
+      .filter((c: string) => c.includes("prompt-context"));
+  }
+
+  it("creates .claude/settings.json (and the dir) with the hook when none exists", () => {
+    const result = writeSettingsHook(dir, "keel");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.action).toBe("created");
+    expect(result.path).toBe(SETTINGS());
+
+    const cmds = promptContextCommands(readSettings());
+    expect(cmds).toHaveLength(1);
+    expect(cmds[0]).toBe('KEEL_REPO="$CLAUDE_PROJECT_DIR" keel prompt-context');
+  });
+
+  it("mirrors the launch command it's given", () => {
+    writeSettingsHook(dir, "node ./dist/index.js");
+    expect(promptContextCommands(readSettings())[0]).toBe(
+      'KEEL_REPO="$CLAUDE_PROJECT_DIR" node ./dist/index.js prompt-context',
+    );
+  });
+
+  it("merges into an existing settings.json, preserving other hooks and keys", () => {
+    fs.mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    fs.writeFileSync(
+      SETTINGS(),
+      JSON.stringify({
+        hooks: { Stop: [{ hooks: [{ type: "command", command: "keel verdict --hook" }] }] },
+        model: "sonnet",
+      }),
+    );
+    const result = writeSettingsHook(dir, "keel");
+    if ("error" in result) throw new Error(result.error);
+    expect(result.action).toBe("updated");
+
+    const s = readSettings();
+    expect(s.model).toBe("sonnet"); // untouched top-level key
+    expect(s.hooks.Stop[0].hooks[0].command).toBe("keel verdict --hook"); // untouched Stop hook
+    expect(promptContextCommands(s)).toHaveLength(1); // our hook added
+  });
+
+  it("is idempotent: a re-run with the same command reports no change", () => {
+    writeSettingsHook(dir, "keel");
+    const before = fs.readFileSync(SETTINGS(), "utf8");
+    const result = writeSettingsHook(dir, "keel");
+    if ("error" in result) throw new Error(result.error);
+
+    expect(result.action).toBe("unchanged");
+    expect(fs.readFileSync(SETTINGS(), "utf8")).toBe(before); // byte-identical
+  });
+
+  it("updates the command in place without duplicating when it changes", () => {
+    writeSettingsHook(dir, "keel");
+    const result = writeSettingsHook(dir, "node ./dist/index.js");
+    if ("error" in result) throw new Error(result.error);
+
+    expect(result.action).toBe("updated");
+    const cmds = promptContextCommands(readSettings());
+    expect(cmds).toHaveLength(1); // replaced, not appended
+    expect(cmds[0]).toBe('KEEL_REPO="$CLAUDE_PROJECT_DIR" node ./dist/index.js prompt-context');
+  });
+
+  it("refuses to overwrite an unparseable settings.json", () => {
+    fs.mkdirSync(path.join(dir, ".claude"), { recursive: true });
+    fs.writeFileSync(SETTINGS(), "{ not valid json ");
+    const result = writeSettingsHook(dir, "keel");
+
+    expect("error" in result).toBe(true);
+    expect(fs.readFileSync(SETTINGS(), "utf8")).toBe("{ not valid json "); // left exactly as-is
   });
 });

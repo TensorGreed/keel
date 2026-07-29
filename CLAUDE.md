@@ -57,6 +57,8 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   init.ts           `keel init`: register keel in a project's .mcp.json + add a "Working with
                     Keel" guidance section to the repo's CLAUDE.md (idempotent markers; --no-claude-md)
+                    + install the prompt-context UserPromptSubmit hook in .claude/settings.json
+                    (non-destructive merge, idempotent; --no-hooks)
   mcp/tools.ts      Tool definitions + zod schemas (get_dependencies, get_impact,
                     select_tests, preflight, why, verdict, context, suggest_reviewers,
                     get_history, flaky_tests; workspace_impact when in a workspace)
@@ -330,5 +332,8 @@ a *local* query embedding when Ollama answers within ~500ms, hard ~1s total budg
 top 3 relevant decisions as `additionalContext` (summary + PR/ADR receipt + linked files, one line
 each). Because it runs on every prompt the contract is strict: no hits → empty output, and it never
 errors, never blocks, never over-runs the budget (the embedding is raced and dropped on any slowness,
-per principle 1). Wired in `recipes/claude-code-hook.md` alongside the `verdict` Stop hook, and this
-repo dogfoods both in `.claude/settings.json`. No remote/generative calls.
+per principle 1). `keel init` installs it by default (`writeSettingsHook` — a non-destructive,
+idempotent merge into the target repo's `.claude/settings.json`, `--no-hooks` to skip; mirrors the
+same launch command it writes to `.mcp.json`). The stronger `verdict` **Stop** hook is a completion
+gate, so it stays opt-in via `recipes/claude-code-hook.md`; this repo dogfoods both in
+`.claude/settings.json`. No remote/generative calls.
