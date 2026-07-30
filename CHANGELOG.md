@@ -101,6 +101,16 @@ process could hang, corrupt state, or carry hostile text into an agent's context
 - **`keel init` writes agent guidance.** Beyond registering the server in `.mcp.json`, it
   appends a "Working with Keel" section to the repo's `CLAUDE.md` behind idempotent markers
   (`--no-claude-md` to skip).
+- **A scheduled cold-start battery** (`npm run test:coldstart`,
+  `.github/workflows/coldstart.yml`). Weekly and on demand, keel's graph is built over pinned SHAs
+  of four real repos — hono (TypeScript), flask (Python), gin (Go) and spring-petclinic (Java +
+  Spring) — and asserted against measured invariants: file count, the blast radius of a named core
+  file, test selection for a seeded change (non-empty *and* selective), and the edge kinds each
+  language model requires. Plus the 50-projects-in-one-package finding, pinned as an offline check
+  that Java package adjacency never crosses a build module. Failures open (and later close) a
+  single GitHub issue rather than a weekly duplicate. Cold-start runs on unfamiliar repos have
+  found more real bugs than anything else in keel's development; this makes them permanent.
+  `test/ci/**` is excluded from `npm test` — see `vitest.config.ts`.
 - **Windows support, tested in CI.** The test matrix gains a `windows-latest` leg (Node 22 only,
   to bound minutes) and the suite is green there. Platform differences now live in one place,
   `src/util/platform.ts`: PATHEXT-aware PATH resolution, `.cmd`/`.bat` shims routed through a

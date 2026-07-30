@@ -122,7 +122,12 @@ src/
   events/           Event log: schema.sql + EventStore (SqliteEventStore via node:sqlite)
 recipes/            Copy-pasteable integrations (claude-code-hook.md: verdict as a Stop hook;
                     github-check.md: verdict as a GitHub check on every PR)
-test/               Vitest; fixtures under test/fixtures/
+test/               Vitest; fixtures under test/fixtures/, cross-platform helpers under
+                    test/helpers/ (always use rmDir, not fs.rmSync, in afterEach)
+test/ci/            Opt-in batteries, EXCLUDED from `npm test` (vitest.config.ts) because they take
+                    minutes: coldstart.test.ts (graph invariants over pinned SHAs of hono/flask/gin/
+                    spring-petclinic — drift insurance, weekly via .github/workflows/coldstart.yml,
+                    which files an issue on failure). Run with `npm run test:coldstart`
 ```
 
 ## Conventions

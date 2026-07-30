@@ -1,0 +1,122 @@
+name: cold-start battery
+
+# Drift insurance. Pointing keel at a repo nobody wrote a fixture for has found more real bugs
+# than anything else in its development (Java same-package modeling, src/ layout by convention,
+# the 50-projects-in-one-package fusion, pytest conftest aborts) — but those were one-off manual
+# runs, so nothing stopped a later change from quietly undoing them. This runs the same checks
+# weekly against pinned SHAs of hono, flask, gin and spring-petclinic, and opens an issue when a
+# number moves. See test/ci/coldstart.test.ts for the invariants and how to refresh them.
+#
+# It clones from the network, so it is deliberately NOT part of `npm test`.
+
+on:
+  schedule:
+    # Mondays 06:17 UTC. Off the hour on purpose: scheduled workflows queue behind the crowd that
+    # picks :00, and a delayed run of this is a delayed signal.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+# One at a time: two concurrent runs would fight over the same clone cache.
+concurrency:
+  group: coldstart
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write # to file (or close) the drift issue
+
+jobs:
+  battery:
+    name: graph invariants over pinned real repos
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      # The clones are pinned SHAs, so they can never go stale — cache them on the pins themselves
+      # (the test file holds every SHA, so its hash is the right key).
+      - name: Cache the pinned clones
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/keel-coldstart
+          key: coldstart-clones-${{ hashFiles('test/ci/coldstart.test.ts') }}
+
+      - name: Run the battery
+        id: battery
+        continue-on-error: true # so the reporting steps below always run
+        shell: bash # explicit, for pipefail: tee must not mask a failing exit code
+        env:
+          KEEL_COLDSTART_DIR: ${{ runner.temp }}/keel-coldstart
+        run: npm run test:coldstart 2>&1 | tee coldstart.log
+
+      - name: Report drift as an issue
+        if: steps.battery.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const TITLE = 'Cold-start battery failing: graph invariants drifted';
+            // Keep the tail — vitest puts the failed assertions and their actual-vs-expected there.
+            let log = '(no output captured — the battery never started)';
+            try { log = fs.readFileSync('coldstart.log', 'utf8'); } catch { /* keep the placeholder */ }
+            const tail = log.length > 12000 ? log.slice(-12000) : log;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The weekly cold-start battery failed on \`${context.sha.slice(0, 8)}\`.`,
+              '',
+              `Run: ${runUrl}`,
+              '',
+              'The pins are fixed SHAs, so a number that moved means **keel** changed, not the repo.',
+              'Investigate before updating the table in `test/ci/coldstart.test.ts`.',
+              '',
+              '<details><summary>Battery output (tail)</summary>',
+              '',
+              '```',
+              tail,
+              '```',
+              '',
+              '</details>',
+            ].join('\n');
+
+            // One issue, many comments — a weekly failure must not open a weekly duplicate.
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((i) => i.title === TITLE);
+            if (existing) {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: existing.number, body });
+              core.notice(`Commented on existing drift issue #${existing.number}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({ ...context.repo, title: TITLE, body });
+              core.notice(`Opened drift issue #${created.number}`);
+            }
+
+      - name: Close the drift issue once the battery is green again
+        if: steps.battery.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const TITLE = 'Cold-start battery failing: graph invariants drifted';
+            const { data: open } = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find((i) => i.title === TITLE);
+            if (!existing) return;
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.createComment({
+              ...context.repo,
+              issue_number: existing.number,
+              body: `Green again on \`${context.sha.slice(0, 8)}\` — closing. Run: ${runUrl}`,
+            });
+            await github.rest.issues.update({ ...context.repo, issue_number: existing.number, state: 'closed' });
+
+      - name: Fail the job if the battery failed
+        if: steps.battery.outcome == 'failure'
+        run: exit 1
