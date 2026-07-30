@@ -12,7 +12,7 @@
  *     fails", a `.cmd` does the same job; where the stub needs real shell scripting, the test says
  *     so and skips.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { IS_WINDOWS, linkDir, spawnSpec } from "../../src/util/platform.js";
@@ -38,6 +38,40 @@ export function toolSync(cmd: string, args: string[], opts: Parameters<typeof ex
   const spec = spawnSpec(cmd, args);
   const out = execFileSync(spec.command, spec.args, { ...opts, shell: spec.shell });
   return out?.toString() ?? "";
+}
+
+export interface CommandRun {
+  /** the command line actually executed, for a failure message */
+  command: string;
+  stdout: string;
+  stderr: string;
+  status: number | null;
+  /** set when the process could not be spawned at all */
+  spawnError?: string;
+}
+
+/**
+ * Run npm and capture BOTH streams without ever throwing. Use this instead of `npmSync` whenever a
+ * failure should become a readable assertion rather than an exception: `npmSync` throws on a
+ * non-zero exit and discards stderr, so an environment difference surfaces as a stack trace with
+ * none of the evidence in it. Here the caller gets everything and decides.
+ */
+export function npmCapture(args: string[], opts: { cwd: string }): CommandRun {
+  const spec = spawnSpec(IS_WINDOWS ? "npm.cmd" : "npm", args);
+  const command = `npm ${args.join(" ")}`;
+  const result = spawnSync(spec.command, spec.args, {
+    cwd: opts.cwd,
+    shell: spec.shell,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  return {
+    command,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+    status: result.status,
+    ...(result.error ? { spawnError: result.error.message } : {}),
+  };
 }
 
 /** Run npm synchronously, through a shell on Windows (npm there is `npm.cmd`). */
