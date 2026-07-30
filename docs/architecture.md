@@ -207,6 +207,44 @@ Decision records mined from PR threads/ADRs/tickets, linked to graph nodes, embe
 for retrieval. Mining runs offline with local (Ollama) or batch Haiku-class models —
 see the cost rules in `CLAUDE.md`. Humans can pin/correct records; corrections win.
 
+### Large-repo budget
+
+The graph build is the one operation whose cost scales with the whole repo rather than with the
+change under analysis, so it carries explicit budgets. They're enforced by `test/ci/perf.test.ts`
+(`npm run test:perf`) against a generated ~24k-file, four-language repo, and reported per-repo by
+`keel doctor`'s **Graph build** row.
+
+| Budget | Value | Measured (24k files, dev box) |
+|---|---|---|
+| Cold full build, wall clock | < 60 s | ~2.2 s |
+| Peak RSS across the builds | < 1536 MB | ~680 MB |
+| Serialized graph (`.keel/graph.json`) | < 64 MB | ~13.5 MB |
+| Per-file cost growth, 6k → 24k files | < 2.0× | 1.01× |
+| Per-file cost, as reported by `keel doctor` | < 1 ms/file above 500 files | ~0.09 ms/file |
+
+The absolute ceilings are catastrophe backstops, an order of magnitude over measured, because a
+tight wall-clock assertion on a shared CI runner flakes on a noisy neighbour and a loose one never
+fires. The load-bearing budget is the **relative** one: build the same shape at two scales and
+require the per-file cost not to grow. That is machine-independent, and an accidentally quadratic
+pass shows up there long before it shows up as a number a human would question.
+
+Which is exactly how the one such pass was found. Java models a package as one unit, which meant
+all-pairs adjacency: N² edges for a package of N types. Fine at realistic package sizes, a cliff at
+legacy ones — a single 1000-type package measured a million edges, 4.7 s and a 125 MB graph cache,
+against 2.4 s for the entire 24k-file repo. Above `PACKAGE_CLIQUE_LIMIT` (200 files) the scanner now
+links such a package as a **ring** instead: reachability-equivalent, so blast radius, impact and
+test selection are bit-for-bit unchanged, at N edges instead of N² (the 1000-type package: 101 ms,
+0.4 MB). The stated cost is that `get_dependencies` reports one same-package neighbour for a file in
+such a package rather than all of them, warned about at build time. That trade is deliberate: an
+under-reported *blast radius* would let the simulator call a change safe when it isn't, while an
+under-reported *direct-neighbour list* only reads oddly — and a 999-entry mutual `package` edge list
+was never useful to read.
+
+Two costs are deliberately outside these budgets: the tree-sitter WASM grammars load once per
+process (excluded from the timing, since it's a fixed startup cost, not a repo cost), and any
+`.java` change forces a full rebuild rather than an incremental update, because Spring DI edges are
+cross-file.
+
 ### Platform layer (`src/util/platform.ts`)
 
 Keel spawns processes, links directories, and keys its graph by relative path — the three things

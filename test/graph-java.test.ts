@@ -1,8 +1,11 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildFileGraph, reportFor, transitiveDependents, type FileGraph } from "../src/graph/dependencies.js";
 import { initJavaScanner } from "../src/graph/java-scanner.js";
+import { rmDir } from "./helpers/platform.js";
 
 // Java graph analysis via the web-tree-sitter scanner. buildFileGraph is synchronous but the Java
 // parser needs a one-time async init first. These resolver/scanner tests never invoke a build tool,
@@ -139,5 +142,67 @@ describe("java: Gradle single-module", () => {
     const test = "src/test/java/com/example/g/WidgetTest.java";
     expect(reportFor(g, test).dependencies).toEqual([widget]); // no import; adjacency across roots
     expect(reportFor(g, widget).dependents).toEqual([test]);
+  });
+});
+
+/**
+ * An oversized Java package. All-pairs adjacency is what a package *is*, but it costs N² edges —
+ * a cliff, not a slope (a 1000-type package measured a million edges, 4.7s and a 125MB graph cache,
+ * against 2.4s for a whole 23k-file four-language repo). Above PACKAGE_CLIQUE_LIMIT the scanner
+ * links the package as a ring instead, which is reachability-equivalent: what these tests pin is
+ * that the blast radius the simulator depends on is IDENTICAL either way, and that the documented
+ * cost — a shorter direct-neighbour list — is the only difference.
+ */
+describe("java: an oversized package is ring-linked, with the same blast radius", () => {
+  const LIMIT = 200; // PACKAGE_CLIQUE_LIMIT in java-scanner.ts
+  let dir: string;
+
+  /** A single module with one package of `n` types, none importing anything. */
+  function makePackage(n: number): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "keel-bigpkg-"));
+    fs.writeFileSync(path.join(root, "pom.xml"), "<project><artifactId>m</artifactId></project>\n");
+    const pkgDir = path.join(root, "src", "main", "java", "com", "legacy");
+    fs.mkdirSync(pkgDir, { recursive: true });
+    for (let i = 0; i < n; i++) {
+      fs.writeFileSync(path.join(pkgDir, `T${i}.java`), `package com.legacy;\n\npublic class T${i} {\n  public int f() { return ${i}; }\n}\n`);
+    }
+    return root;
+  }
+
+  afterEach(() => {
+    if (dir) rmDir(dir);
+  });
+
+  it("keeps exact all-pairs adjacency at the limit", () => {
+    dir = makePackage(LIMIT);
+    const g = buildFileGraph(dir);
+    expect(g.files).toHaveLength(LIMIT);
+    const first = "src/main/java/com/legacy/T0.java";
+    // Every other file, directly, both ways — the unmodified model.
+    expect(reportFor(g, first).dependencies).toHaveLength(LIMIT - 1);
+    expect(reportFor(g, first).dependents).toHaveLength(LIMIT - 1);
+    expect(transitiveDependents(g, first)).toHaveLength(LIMIT - 1);
+  });
+
+  it("switches to a ring one file past the limit, preserving the blast radius exactly", () => {
+    const n = LIMIT + 1;
+    dir = makePackage(n);
+    const g = buildFileGraph(dir);
+    expect(g.files).toHaveLength(n);
+
+    let edges = 0;
+    for (const targets of g.imports.values()) edges += targets.size;
+    expect(edges, "a ring is one edge per file, not N²").toBe(n);
+
+    // The number the flight simulator is built on is unchanged: still every other file.
+    for (const file of ["T0", "T100", `T${n - 1}`].map((t) => `src/main/java/com/legacy/${t}.java`)) {
+      expect(transitiveDependents(g, file), `${file} blast radius`).toHaveLength(n - 1);
+      // The stated cost: one direct same-package neighbour instead of all of them.
+      expect(reportFor(g, file).dependencies).toHaveLength(1);
+    }
+
+    // Still adjacency, not a fabricated import — provenance has to stay honest.
+    const kinds = new Set([...g.edgeKind.values()].flatMap((m) => [...m.values()]));
+    expect([...kinds]).toEqual(["package"]);
   });
 });

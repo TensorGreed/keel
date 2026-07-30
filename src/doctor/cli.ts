@@ -14,13 +14,15 @@ import { doctorExitCode, renderDoctorTable, runDoctorChecks, type DoctorEnv } fr
 
 const DOCTOR_HELP = `keel doctor — check that keel can work in this environment
 
-Usage: keel doctor [--json]
+Usage: keel doctor [--json] [--no-graph]
 
-  --json   emit the full report as JSON instead of a table
+  --json       emit the full report as JSON instead of a table
+  --no-graph   skip the timed graph build (the one probe whose cost scales with the repo)
 
-Probes Node/git versions, the repo, the event db, the graph cache, Ollama + required models,
-GITHUB_TOKEN validity, available test runners, and the .mcp.json / hook registration. Each failing
-line names a fix. Exit code: 1 if anything is red (a hard failure), else 0. Reads KEEL_REPO or cwd.`;
+Probes Node/git versions, the repo, the event db, the graph cache, a timed cold graph build, Ollama
++ required models, GITHUB_TOKEN validity, available test runners, and the .mcp.json / hook
+registration. Each failing line names a fix. Exit code: 1 if anything is red (a hard failure), else
+0. Reads KEEL_REPO or cwd.`;
 
 const PROBE_TIMEOUT_MS = 2_000; // doctor stays snappy; a slow probe is itself a finding
 const RUNNER_PROBE_TIMEOUT_MS = 5_000;
@@ -128,7 +130,32 @@ function probeHook(root: string): boolean {
 }
 
 /** Gather every fact from the real environment. Defensive: any probe failure becomes a finding. */
-export async function gatherDoctorEnv(root: string): Promise<DoctorEnv> {
+/**
+ * Time a COLD graph build over this repo. This is the one probe whose cost scales with the target —
+ * seconds on a large monorepo — and that is the point: the first graph-backed tool call pays exactly
+ * this, and until now a user on a monster repo had no way to tell a slow build from a hang. Timed
+ * cold on purpose (buildFileGraph directly, bypassing the on-disk cache), since timing a cache hit
+ * would measure nothing. Defensive like every other probe: a failure becomes a finding.
+ */
+async function probeGraphBuild(root: string, isRepo: boolean, skip: boolean): Promise<DoctorEnv["graphBuild"]> {
+  if (skip) return { state: "skipped", reason: "--no-graph" };
+  if (!isRepo) return { state: "skipped", reason: "not a git repo" };
+  try {
+    const { buildFileGraph } = await import("../graph/dependencies.js");
+    const { initGraphScanners } = await import("../graph/scanners.js");
+    await initGraphScanners(); // the tree-sitter grammars; excluded from the timing below
+    const started = Date.now();
+    const graph = buildFileGraph(root);
+    const ms = Date.now() - started;
+    let edges = 0;
+    for (const targets of graph.imports.values()) edges += targets.size;
+    return { state: "measured", files: graph.files.length, edges, ms };
+  } catch (err) {
+    return { state: "error", error: (err as Error).message };
+  }
+}
+
+export async function gatherDoctorEnv(root: string, options: { skipGraph?: boolean } = {}): Promise<DoctorEnv> {
   const gitVersion = await gitLine(root, ["--version"]);
   const isRepo = (await gitLine(root, ["rev-parse", "--is-inside-work-tree"])) === "true";
   const head = isRepo ? await gitLine(root, ["rev-parse", "HEAD"]) : null;
@@ -160,6 +187,7 @@ export async function gatherDoctorEnv(root: string): Promise<DoctorEnv> {
       { name: "mvn", available: mvn },
       { name: "gradle", available: gradle },
     ],
+    graphBuild: await probeGraphBuild(root, isRepo, options.skipGraph ?? false),
     mcpRegistered: probeMcp(root),
     hookInstalled: probeHook(root),
   };
@@ -173,7 +201,7 @@ export async function runDoctor(argv: string[]): Promise<number> {
   const asJson = argv.includes("--json");
   const root = path.resolve(process.env["KEEL_REPO"] ?? process.cwd());
 
-  const env = await gatherDoctorEnv(root);
+  const env = await gatherDoctorEnv(root, { skipGraph: argv.includes("--no-graph") });
   const results = runDoctorChecks(env);
   const exit = doctorExitCode(results);
 

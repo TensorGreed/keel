@@ -57,7 +57,9 @@ src/
   serve.ts          Starts the MCP server over stdio; ingests commits first
   doctor/           `keel doctor`: doctor.ts (pure checks over a gathered DoctorEnv → ok/warn/fail
                     with one named fix each), cli.ts (defensive real-env probes; table + --json,
-                    exit 1 on red). Bounded probes via util/timeouts (2s GitHub/Ollama leash)
+                    exit 1 on red). Bounded probes via util/timeouts (2s GitHub/Ollama leash); one
+                    probe scales with the repo — a timed COLD graph build (files/edges/ms-per-file,
+                    warns past 1 ms/file above 500 files), skippable with --no-graph
   util/             timeouts.ts (central timeout policy + fetchTimed/execFileTimed/withProgress for
                     every outbound call; audited by test/timeout-audit.test.ts), sanitize.ts
                     (neutralize+cap attacker-influenced decision text before it reaches an agent),
@@ -127,7 +129,9 @@ test/               Vitest; fixtures under test/fixtures/, cross-platform helper
 test/ci/            Opt-in batteries, EXCLUDED from `npm test` (vitest.config.ts) because they take
                     minutes: coldstart.test.ts (graph invariants over pinned SHAs of hono/flask/gin/
                     spring-petclinic — drift insurance, weekly via .github/workflows/coldstart.yml,
-                    which files an issue on failure). Run with `npm run test:coldstart`
+                    which files an issue on failure) and perf.test.ts (the large-repo budget over a
+                    generated ~24k-file four-language repo; synth-repo.ts is the generator; budgets
+                    documented in docs/architecture.md). `npm run test:coldstart` / `test:perf`
 ```
 
 ## Conventions

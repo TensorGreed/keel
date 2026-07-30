@@ -21,6 +21,7 @@ function baseEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
     isRepo: true,
     db: { state: "ok", counts: { commits: 10, prs: 2, decisions: 3 } },
     cache: { state: "fresh", head: "abc1234def5678" },
+    graphBuild: { state: "measured", files: 1200, edges: 3400, ms: 400 },
     ollama: { reachable: true, models: ["nomic-embed-text:latest", "llama3.2:latest"], required: ["nomic-embed-text", "llama3.2"] },
     github: { state: "valid", remaining: 4999, limit: 5000 },
     runners: [
@@ -66,6 +67,39 @@ describe("runDoctorChecks — per-probe faults", () => {
     expect(err.status).toBe("fail");
     expect(err.fix).toMatch(/corrupt/i);
     expect(find(runDoctorChecks(baseEnv({ db: { state: "absent" } })), "Event log").status).toBe("warn");
+  });
+
+  it("reports the timed graph build, warning only when it exceeds the per-file budget", () => {
+    // 1200 files in 400ms = 0.33 ms/file — comfortably inside the 1 ms/file budget.
+    const ok = find(runDoctorChecks(baseEnv()), "Graph build");
+    expect(ok.status).toBe("ok");
+    expect(ok.detail).toMatch(/1200 files, 3400 edges in 0\.4s \(0\.33 ms\/file\)/);
+
+    // Same repo, 20x slower: a monorepo-shaped finding, with the fix naming the cache.
+    const slow = find(runDoctorChecks(baseEnv({ graphBuild: { state: "measured", files: 1200, edges: 3400, ms: 8_000 } })), "Graph build");
+    expect(slow.status).toBe("warn");
+    expect(slow.detail).toMatch(/slower than the 1 ms\/file budget/);
+    expect(slow.fix).toMatch(/\.keel\/graph\.json|persist \.keel/);
+
+    // An efficient but enormous repo still warns: the first tool call would feel hung.
+    const huge = find(runDoctorChecks(baseEnv({ graphBuild: { state: "measured", files: 400_000, edges: 1, ms: 40_000 } })), "Graph build");
+    expect(huge.status).toBe("warn");
+    expect(huge.detail).toMatch(/first graph tool call will feel slow/);
+
+    // A SMALL repo is judged by the absolute ceiling alone: below 500 files the per-file rate is
+    // dominated by one-time costs (tsconfig, workspace scan), so keel's own 233-file repo at
+    // 0.8 ms/file must not read as a finding.
+    expect(find(runDoctorChecks(baseEnv({ graphBuild: { state: "measured", files: 233, edges: 505, ms: 185 } })), "Graph build").status).toBe("ok");
+
+    // A build that can't run at all is red — it blocks every graph-backed tool.
+    const broken = find(runDoctorChecks(baseEnv({ graphBuild: { state: "error", error: "boom" } })), "Graph build");
+    expect(broken.status).toBe("fail");
+    expect(broken.detail).toContain("boom");
+
+    // Skipped (--no-graph, or not a repo) is a warning, not a failure, and says which.
+    const skipped = find(runDoctorChecks(baseEnv({ graphBuild: { state: "skipped", reason: "--no-graph" } })), "Graph build");
+    expect(skipped.status).toBe("warn");
+    expect(skipped.detail).toContain("--no-graph");
   });
 
   it("warns on a stale or absent graph cache", () => {
@@ -144,5 +178,8 @@ describe("gatherDoctorEnv — real probes, hermetic", () => {
     expect(env.runners).toHaveLength(5);
     expect(env.runners.find((r) => r.name === "node")!.available).toBe(true); // node is obviously present
     expect(env.mcpRegistered).toBe(false);
+    // The graph build is measured for real (an empty repo: 0 files, so no per-file division by zero).
+    expect(env.graphBuild).toEqual({ state: "measured", files: 0, edges: 0, ms: expect.any(Number) });
+    expect(find(runDoctorChecks(env), "Graph build").status).toBe("ok");
   }, 30_000);
 });

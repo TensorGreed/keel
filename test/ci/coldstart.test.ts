@@ -183,7 +183,7 @@ describe.each(REPOS)("cold start: $name ($language)", (repo) => {
     dir = await ensureClone(repo);
     resetGraphCache();
     graph = buildFileGraph(dir);
-    // eslint-disable-next-line no-console -- the actuals are the point when a band fails
+    // The actuals are the point when a band fails.
     console.log(`[coldstart] ${repo.name}@${repo.sha.slice(0, 8)}: ${graph.files.length} files`);
   }, 600_000);
 

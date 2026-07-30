@@ -101,6 +101,18 @@ process could hang, corrupt state, or carry hostile text into an agent's context
 - **`keel init` writes agent guidance.** Beyond registering the server in `.mcp.json`, it
   appends a "Working with Keel" section to the repo's `CLAUDE.md` behind idempotent markers
   (`--no-claude-md` to skip).
+- **A large-repo budget** (`npm run test:perf`). A perf smoke test generates a deterministic
+  ~24k-file, four-language repo and asserts explicit budgets on the graph build: wall clock, peak
+  RSS, serialized cache size, and — the load-bearing one — that the *per-file* cost does not grow as
+  the repo goes from 6k to 24k files. Absolute ceilings on a shared runner either flake or never
+  fire; the relative one is machine-independent and is what catches an accidentally quadratic pass.
+  A completeness check runs first, since the cheapest way to pass a perf test is to do less work.
+  Budgets and measurements are documented in `docs/architecture.md`; it runs on the same weekly
+  schedule as the cold-start battery, since a budget nothing runs is dead weight.
+- **`keel doctor` reports a timed cold graph build** — files, edges and ms-per-file — so someone on
+  a large monorepo can tell a slow first tool call from a hang. It warns past 1 ms/file (above 500
+  files, below which one-time costs dominate the rate) or 30s total, with the fix naming the cache.
+  `--no-graph` skips it; it's the one probe whose cost scales with the target repo.
 - **A scheduled cold-start battery** (`npm run test:coldstart`,
   `.github/workflows/coldstart.yml`). Weekly and on demand, keel's graph is built over pinned SHAs
   of four real repos — hono (TypeScript), flask (Python), gin (Go) and spring-petclinic (Java +
@@ -144,6 +156,15 @@ process could hang, corrupt state, or carry hostile text into an agent's context
 
 ### Fixed
 
+- **A large Java package no longer costs N² edges.** Modelling a package as one unit meant all-pairs
+  adjacency — fine at realistic package sizes, a cliff at legacy ones: a single 1000-type package
+  measured a million edges, 4.7s and a 125MB graph cache, against 2.4s for an entire 24k-file
+  four-language repo. Above 200 files in one package the scanner now links it as a **ring**, which is
+  reachability-equivalent — blast radius, impact and test selection are unchanged — at N edges
+  instead of N² (that package: 101ms, 0.4MB). The stated cost, warned about at build time, is that
+  `get_dependencies` shows one same-package neighbour for such a file rather than all of them; an
+  under-reported blast radius would let the simulator call a change safe when it isn't, whereas an
+  under-reported direct-neighbour list only reads oddly. Repos below the limit are unaffected.
 - **Windows: the JS sandbox runner could not start.** It shelled out to `npx`, which is a `.cmd`
   shim there — and since Node 20.12 `spawn` refuses a `.cmd` without a shell. The runner now
   resolves the installed runner's own JS entry from its `bin` field and runs it with

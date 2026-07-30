@@ -47,6 +47,7 @@
     "dev": "tsc && node scripts/copy-assets.mjs && node dist/index.js",
     "test": "vitest run",
     "test:coldstart": "vitest run --config vitest.ci.config.ts test/ci/coldstart.test.ts",
+    "test:perf": "vitest run --config vitest.ci.config.ts test/ci/perf.test.ts",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build && npm test"
   },

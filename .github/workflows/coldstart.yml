@@ -1,13 +1,18 @@
 name: cold-start battery
 
-# Drift insurance. Pointing keel at a repo nobody wrote a fixture for has found more real bugs
-# than anything else in its development (Java same-package modeling, src/ layout by convention,
-# the 50-projects-in-one-package fusion, pytest conftest aborts) — but those were one-off manual
-# runs, so nothing stopped a later change from quietly undoing them. This runs the same checks
-# weekly against pinned SHAs of hono, flask, gin and spring-petclinic, and opens an issue when a
-# number moves. See test/ci/coldstart.test.ts for the invariants and how to refresh them.
+# Drift insurance for the two things a fixture suite can't hold: real repos, and scale.
 #
-# It clones from the network, so it is deliberately NOT part of `npm test`.
+# 1. The COLD-START battery. Pointing keel at a repo nobody wrote a fixture for has found more real
+#    bugs than anything else in its development (Java same-package modeling, src/ layout by
+#    convention, the 50-projects-in-one-package fusion, pytest conftest aborts) — but those were
+#    one-off manual runs, so nothing stopped a later change from quietly undoing them. This runs the
+#    same checks weekly against pinned SHAs of hono, flask, gin and spring-petclinic.
+# 2. The LARGE-REPO BUDGET, over a generated ~24k-file four-language repo: wall clock, peak memory,
+#    cache size, and — the load-bearing one — that per-file build cost doesn't grow with repo size.
+#
+# See test/ci/ for the invariants and how to refresh them, and docs/architecture.md for the budgets.
+# Both clone or generate at a scale that takes minutes, so neither is part of `npm test`; a budget
+# nothing runs is dead weight, hence this schedule. A failure in either opens one issue.
 
 on:
   schedule:
@@ -27,7 +32,7 @@ permissions:
 
 jobs:
   battery:
-    name: graph invariants over pinned real repos
+    name: graph invariants over pinned real repos + the large-repo budget
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,33 +53,57 @@ jobs:
           path: ${{ runner.temp }}/keel-coldstart
           key: coldstart-clones-${{ hashFiles('test/ci/coldstart.test.ts') }}
 
-      - name: Run the battery
-        id: battery
+      - name: Run the cold-start battery
+        id: coldstart
         continue-on-error: true # so the reporting steps below always run
         shell: bash # explicit, for pipefail: tee must not mask a failing exit code
         env:
           KEEL_COLDSTART_DIR: ${{ runner.temp }}/keel-coldstart
-        run: npm run test:coldstart 2>&1 | tee coldstart.log
+        run: npm run test:coldstart 2>&1 | tee -a battery.log
+
+      # Runs even when the cold-start half failed: two independent signals, both worth having.
+      - name: Run the large-repo budget
+        id: perf
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: npm run test:perf 2>&1 | tee -a battery.log
+
+      - name: Decide the overall outcome
+        id: battery
+        if: always()
+        run: |
+          if [ "${{ steps.coldstart.outcome }}" = "success" ] && [ "${{ steps.perf.outcome }}" = "success" ]; then
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Report drift as an issue
-        if: steps.battery.outcome == 'failure'
+        if: always() && steps.battery.outputs.outcome == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const TITLE = 'Cold-start battery failing: graph invariants drifted';
+            const TITLE = 'Weekly battery failing: graph invariants or the large-repo budget drifted';
             // Keep the tail — vitest puts the failed assertions and their actual-vs-expected there.
-            let log = '(no output captured — the battery never started)';
-            try { log = fs.readFileSync('coldstart.log', 'utf8'); } catch { /* keep the placeholder */ }
+            let log = '(no output captured — the batteries never started)';
+            try { log = fs.readFileSync('battery.log', 'utf8'); } catch { /* keep the placeholder */ }
             const tail = log.length > 12000 ? log.slice(-12000) : log;
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const body = [
-              `The weekly cold-start battery failed on \`${context.sha.slice(0, 8)}\`.`,
+              `The weekly battery failed on \`${context.sha.slice(0, 8)}\`.`,
+              '',
+              `- cold start (pinned real repos): **${{ steps.coldstart.outcome }}**`,
+              `- large-repo budget: **${{ steps.perf.outcome }}**`,
               '',
               `Run: ${runUrl}`,
               '',
-              'The pins are fixed SHAs, so a number that moved means **keel** changed, not the repo.',
-              'Investigate before updating the table in `test/ci/coldstart.test.ts`.',
+              'The cold-start pins are fixed SHAs, so a number that moved means **keel** changed, not',
+              'the repo — investigate before updating the table in `test/ci/coldstart.test.ts`. The',
+              'budgets are an order of magnitude over measured (docs/architecture.md), so a breach',
+              'there is a real regression, not a slow runner; the per-file growth budget is the one',
+              'that catches an accidentally quadratic pass.',
               '',
               '<details><summary>Battery output (tail)</summary>',
               '',
@@ -98,12 +127,12 @@ jobs:
               core.notice(`Opened drift issue #${created.number}`);
             }
 
-      - name: Close the drift issue once the battery is green again
-        if: steps.battery.outcome == 'success'
+      - name: Close the drift issue once both batteries are green again
+        if: always() && steps.battery.outputs.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
-            const TITLE = 'Cold-start battery failing: graph invariants drifted';
+            const TITLE = 'Weekly battery failing: graph invariants or the large-repo budget drifted';
             const { data: open } = await github.rest.issues.listForRepo({
               ...context.repo, state: 'open', per_page: 100,
             });
@@ -117,6 +146,6 @@ jobs:
             });
             await github.rest.issues.update({ ...context.repo, issue_number: existing.number, state: 'closed' });
 
-      - name: Fail the job if the battery failed
-        if: steps.battery.outcome == 'failure'
+      - name: Fail the job if either battery failed
+        if: always() && steps.battery.outputs.outcome == 'failure'
         run: exit 1

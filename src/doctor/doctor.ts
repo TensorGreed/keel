@@ -29,6 +29,11 @@ export interface DoctorEnv {
     | { state: "ok"; counts: { commits: number; prs: number; decisions: number } }
     | { state: "error"; error: string };
   cache: { state: "absent" } | { state: "fresh"; head: string } | { state: "stale"; head: string; current: string | null };
+  /** a timed COLD graph build over this repo — the number that explains a slow first tool call */
+  graphBuild:
+    | { state: "skipped"; reason: string }
+    | { state: "measured"; files: number; edges: number; ms: number }
+    | { state: "error"; error: string };
   ollama: { reachable: boolean; models: string[]; required: string[] };
   github:
     | { state: "absent" }
@@ -128,6 +133,54 @@ function cacheCheck(env: DoctorEnv): CheckResult {
   }
 }
 
+/**
+ * Budget for a cold graph build, per file. keel measures ~0.09 ms/file on a 24k-file
+ * four-language repo (docs/architecture.md, test/ci/perf.test.ts); 1 ms/file is an order of
+ * magnitude of headroom, so crossing it on a real repo means something about *that* repo is
+ * expensive — which is exactly what someone on a monster monorepo needs told.
+ */
+const SLOW_BUILD_MS_PER_FILE = 1.0;
+/** And an absolute ceiling, because a big-but-efficient repo can still make the first call feel hung. */
+const SLOW_BUILD_TOTAL_MS = 30_000;
+/**
+ * Below this, the per-file rate says nothing: one-time costs (loading the tsconfig, scanning the
+ * workspace) dominate, so a 200-file repo reads as "slow per file" while taking a fifth of a second
+ * in total. Small repos are judged by the absolute ceiling alone — which they can't reach.
+ */
+const RATE_MEANINGFUL_ABOVE_FILES = 500;
+
+function graphBuildCheck(env: DoctorEnv): CheckResult {
+  const build = env.graphBuild;
+  if (build.state === "skipped") {
+    return { name: "Graph build", status: "warn", detail: `not measured — ${build.reason}` };
+  }
+  if (build.state === "error") {
+    return {
+      name: "Graph build",
+      status: "fail",
+      detail: `the graph could not be built: ${build.error}`,
+      fix: "run a graph tool (e.g. `keel report --arch`) to see the full error; this blocks every graph-backed tool",
+    };
+  }
+  const { files, edges, ms } = build;
+  const perFile = files > 0 ? ms / files : 0;
+  const detail = `${files} files, ${edges} edges in ${(ms / 1000).toFixed(1)}s (${perFile.toFixed(2)} ms/file)`;
+  const rateIsSlow = files >= RATE_MEANINGFUL_ABOVE_FILES && perFile > SLOW_BUILD_MS_PER_FILE;
+  if (rateIsSlow || ms > SLOW_BUILD_TOTAL_MS) {
+    return {
+      name: "Graph build",
+      status: "warn",
+      detail: rateIsSlow
+        ? `${detail} — slower than the ${SLOW_BUILD_MS_PER_FILE} ms/file budget`
+        : `${detail} — over ${SLOW_BUILD_TOTAL_MS / 1000}s, so the first graph tool call will feel slow`,
+      fix:
+        "the cost is paid once per HEAD (.keel/graph.json caches it), so persist .keel/ between CI runs; " +
+        "if it's every run, look for a large generated/vendored tree the walker isn't skipping",
+    };
+  }
+  return { name: "Graph build", status: "ok", detail };
+}
+
 function ollamaCheck(env: DoctorEnv): CheckResult {
   if (!env.ollama.reachable) {
     return {
@@ -217,6 +270,7 @@ export function runDoctorChecks(env: DoctorEnv): CheckResult[] {
     repoCheck(env),
     dbCheck(env),
     cacheCheck(env),
+    graphBuildCheck(env),
     ollamaCheck(env),
     githubCheck(env),
     runnersCheck(env),
