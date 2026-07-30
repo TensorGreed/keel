@@ -271,6 +271,43 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
   );
 
   server.tool(
+    "upgrade_batch",
+    "Analyse MANY dependency upgrades in one pass and classify each against `keel.policy.json`. " +
+      "Every target is scoped from the graph first (cheap, no install), ranked by a risk score " +
+      "combining how much of the repo it reaches, how much of that reach no test proves, how far " +
+      "the version moves, and whether a recorded decision mentions it. They then execute SAFEST " +
+      "FIRST against one shared wall-clock budget, so a batch that runs out of time has completed " +
+      "the upgrades most likely to be mergeable. Outcomes: `pinned` (policy forbids it, not " +
+      "executed, reason given), `auto-merge` (green, fully covered, and the policy opted in), " +
+      "`needs-review`, `blocked`, and `not-run` (the budget ran out — this is NOT a clean result, " +
+      "and it is reported rather than hidden). Each executed entry carries a PR proposal: branch, " +
+      "title, a markdown body containing the executed proof, an applicable manifest patch, and the " +
+      "commands to open it. Keel composes those and NEVER pushes a branch or opens a PR — pushing " +
+      "under someone's credentials is not keel's to assume. Errors come back as data.",
+    {
+      targets: z.array(z.string()).min(1).describe("Upgrade targets, e.g. [\"lodash@4.17.21\", \"zod@3.23.0\"]"),
+      maxSeconds: z.number().int().min(1).optional().describe("Wall-clock budget for the WHOLE batch (default 1800)"),
+      maxSecondsPerPackage: z.number().int().min(1).optional().describe("Per-package cap inside the batch (default 300)"),
+      maxTestsPerPackage: z.number().int().min(0).optional().describe("Cap the tests run per package (default 50)"),
+    },
+    async ({ targets, maxSeconds, maxSecondsPerPackage, maxTestsPerPackage }) => {
+      try {
+        const { runUpgradeBatch } = await import("../upgrade/batch.js");
+        return json(
+          await runUpgradeBatch(repoRoot, targets, {
+            ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+            ...(maxSecondsPerPackage !== undefined ? { maxSecondsPerPackage } : {}),
+            ...(maxTestsPerPackage !== undefined ? { maxTestsPerPackage } : {}),
+            ...(store ? { store } : {}),
+          }),
+        );
+      } catch (err) {
+        return json({ error: `upgrade_batch failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
     "get_history",
     "Recent git history for a file or directory: who changed it, when, and why " +
       "(commit subjects and bodies). The raw material for 'why is this like this?'.",

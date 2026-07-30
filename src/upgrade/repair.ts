@@ -99,7 +99,7 @@ export interface RepairStep {
   scope: UpgradeScope;
   /** tests actually run this step — the upgrade's covering tests plus any the patch touches */
   testsRun: string[];
-  install: { ok: boolean; signals: InstallSignal[]; error?: string };
+  install: { ran: boolean; ok: boolean; signals: InstallSignal[]; error?: string };
   executed: {
     status: string;
     passed?: number;
@@ -189,7 +189,8 @@ export async function runRepairStep(
   });
 
   const install = {
-    ok: !run.bump?.error && (run.bump?.exitCode === null || run.bump?.exitCode === 0),
+    ran: run.bump !== null,
+    ok: run.bump !== null && !run.bump.error && (run.bump.exitCode === null || run.bump.exitCode === 0),
     signals: run.bump?.signals ?? [],
     ...(run.bump?.error ? { error: run.bump.error } : {}),
   };
@@ -355,7 +356,7 @@ function blockedStep(
     maxAttempts,
     scope,
     testsRun: [],
-    install: { ok: false, signals: [] },
+    install: { ran: false, ok: false, signals: [] },
     executed: { status: "error", failures: [], discountedFlaky: [], durationMs: 0 },
     outstanding: [],
     memory,

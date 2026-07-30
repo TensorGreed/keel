@@ -10,19 +10,25 @@
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
 import * as fs from "node:fs";
-import { renderRepairStep, renderUpgradeReport } from "./report.js";
+import { renderBatchResult, renderRepairStep, renderUpgradeReport } from "./report.js";
+import { runUpgradeBatch } from "./batch.js";
 import { runRepairStep } from "./repair.js";
 import { runUpgradeAnalysis } from "./upgrade.js";
 
 const UPGRADE_HELP = `keel upgrade — scope a dependency upgrade and prove what it breaks
 
 Usage: keel upgrade <pkg>@<version|latest> [options]
+       keel upgrade --batch <pkg>@<version> <pkg>@<version> … [options]
 
   --json            emit the full structured report instead of the table
   --scope-only      graph analysis only: no install, no tests (fast, no network). Proves
                     nothing, so it withholds the verdict and always exits 2 — never 0.
   --max-tests N     cap the covering tests that run (default 50, or KEEL_MAX_TESTS)
   --max-seconds N   wall-clock cap for install + tests (default 300, or KEEL_MAX_SECONDS)
+
+Batch (many packages in one pass):
+  --batch           analyse every target given, ranked by risk and classified by policy
+  --max-package-seconds N   per-package cap inside the batch (default 300)
 
 Repair loop (one failure at a time; YOU write the patch, keel proves it):
   --repair          report the single next break with the context needed to fix it
@@ -39,7 +45,11 @@ part of the surface no test covers.
 REPORT ONLY: this phase attempts no repairs. Every failure is reported as a work item.
 
 Exit codes: 0 pass, 2 warn, 1 block or error. With --repair: 0 green, 2 work remaining,
-1 exhausted or blocked. Reads KEEL_REPO or the current directory.`;
+1 exhausted or blocked. With --batch: 0 when nothing is blocked or unrun, 2 when something
+needs review, 1 when anything is blocked or the budget ran out.
+
+keel composes PR proposals but never pushes a branch or opens a PR — the commands are printed
+for you to run. Reads KEEL_REPO or the current directory.`;
 
 function flagValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -49,19 +59,25 @@ function flagValue(argv: string[], name: string): string | undefined {
 }
 
 /** Flags that consume the next argv entry — so `--max-tests 5` doesn't read `5` as the package. */
-const VALUE_FLAGS = new Set(["--max-tests", "--max-seconds", "--patch", "--attempt", "--max-attempts"]);
+const VALUE_FLAGS = new Set(["--max-tests", "--max-seconds", "--patch", "--attempt", "--max-attempts", "--max-package-seconds"]);
 
-/** The first non-flag argument: the upgrade target. */
-export function firstPositional(argv: string[]): string | undefined {
+/** Every non-flag argument, in order: the upgrade target(s). */
+export function positionals(argv: string[]): string[] {
+  const out: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]!;
     if (arg.startsWith("-")) {
       if (VALUE_FLAGS.has(arg)) i++; // skip its value
       continue;
     }
-    return arg;
+    out.push(arg);
   }
-  return undefined;
+  return out;
+}
+
+/** The first non-flag argument: the upgrade target. */
+export function firstPositional(argv: string[]): string | undefined {
+  return positionals(argv)[0];
 }
 
 function positiveInt(raw: string | undefined): number | undefined {
@@ -98,6 +114,9 @@ export async function runUpgrade(argv: string[]): Promise<number> {
   }
 
   try {
+    if (argv.includes("--batch")) {
+      return await batchRun(repoRoot, positionals(argv), argv, asJson, store);
+    }
     if (argv.includes("--repair")) {
       return await repairStep(repoRoot, target, argv, asJson, store);
     }
@@ -124,6 +143,36 @@ export async function runUpgrade(argv: string[]): Promise<number> {
   } finally {
     store?.close();
   }
+}
+
+/** Many packages in one pass, ranked by risk and classified by keel.policy.json. */
+async function batchRun(
+  repoRoot: string,
+  targets: string[],
+  argv: string[],
+  asJson: boolean,
+  store: SqliteEventStore | undefined,
+): Promise<number> {
+  const result = await runUpgradeBatch(repoRoot, targets, {
+    ...(positiveInt(flagValue(argv, "--max-seconds")) !== undefined ? { maxSeconds: positiveInt(flagValue(argv, "--max-seconds"))! } : {}),
+    ...(positiveInt(flagValue(argv, "--max-package-seconds")) !== undefined
+      ? { maxSecondsPerPackage: positiveInt(flagValue(argv, "--max-package-seconds"))! }
+      : {}),
+    ...(positiveInt(flagValue(argv, "--max-tests")) !== undefined ? { maxTestsPerPackage: positiveInt(flagValue(argv, "--max-tests"))! } : {}),
+    ...(store ? { store } : {}),
+  });
+
+  if ("error" in result) {
+    if (asJson) console.log(JSON.stringify(result, null, 2));
+    else console.error(`[keel] ${result.error}`);
+    return 1;
+  }
+
+  console.log(asJson ? JSON.stringify(result, null, 2) : renderBatchResult(result));
+  // A batch that didn't finish is a failure of the run, not a clean result: exit 1 alongside a
+  // genuine block, so CI can't read "we stopped looking" as "nothing to see".
+  if (result.summary.blocked > 0 || result.summary["not-run"] > 0) return 1;
+  return result.summary["needs-review"] > 0 || result.summary.pinned > 0 ? 2 : 0;
 }
 
 /** One turn of the repair loop: prove the caller's patch, hand back the next task (or GREEN). */

@@ -1110,7 +1110,10 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
   const requested = options.testFiles;
   const ranTests = requested.slice(0, maxTests);
   const capped = ranTests.length < requested.length ? { requested: requested.length, ran: ranTests.length } : undefined;
-  if (ranTests.length === 0) {
+  // No tests to run AND nothing to prepare: there is nothing a worktree could tell us.
+  // With a `prepare` hook there IS — an install can fail, or warn about peers or engines, whether
+  // or not a test covers the change — so that case still builds the worktree and runs it.
+  if (ranTests.length === 0 && !options.prepare) {
     return done({ status: "no-tests", runner: null, ranTests: [], ...(capped ? { capped } : {}) });
   }
 
@@ -1168,6 +1171,11 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
           ...(capped ? { capped } : {}),
         });
       }
+    }
+
+    if (ranTests.length === 0) {
+      // The prepare step ran (and did not abort), but nothing covers the change.
+      return done({ status: "no-tests", runner: null, ranTests: [], ...(prepareOutput ? { output: tail(prepareOutput) } : {}), ...(capped ? { capped } : {}) });
     }
 
     // A change's covering tests are one language (no cross-language edges), so a Python selection

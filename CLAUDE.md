@@ -101,7 +101,12 @@ src/
                     with decisions naming the package, receipts attached, surfaced first and never
                     judged) + past repairs (a green repair is recorded as an `upgrade_repair` event,
                     idempotent by package+version+patch hash, and returned as context next time).
-                    MCP: `upgrade_scope`, `upgrade_repair`
+                    Phase 3 (batch + policy): batch.ts (scope-then-rank by risk, execute safest-first
+                    on one shared budget, classify against policy.upgrades; `not-run` is reported,
+                    never silent) and pr.ts (a PR proposal per upgrade: branch, title, a body
+                    carrying the executed proof, a REAL git-appliable manifest patch, and the
+                    commands — keel composes, it never pushes or opens).
+                    MCP: `upgrade_scope`, `upgrade_repair`, `upgrade_batch`
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests; `prepare` hook +
@@ -134,8 +139,8 @@ src/
                     (commit + PR authors, bots excluded) → `suggest_reviewers`, context owners,
                     and the verdict's warnOnForeignCode signal. No model calls.
   trust/            Trust layer: facts.ts (compose impact/preflight/decisions into
-                    machine-checkable facts), policy.ts (keel.policy.json, pure eval +
-                    glob), arch.ts (forbiddenImports: forbidden from→to graph edges),
+                    machine-checkable facts), policy.ts (keel.policy.json, pure eval + glob;
+                    `upgrades` block: autoMergeOnGreen / alwaysReview / pinned-with-a-reason), arch.ts (forbiddenImports: forbidden from→to graph edges),
                     hotspots.ts (rank files by churn × blast radius × coverage gap),
                     verdict.ts (pass/warn/block with audited reasons), verdict-cli.ts
                     (`keel verdict` for CI + hooks), report-cli.ts (`keel report`

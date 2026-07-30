@@ -25,8 +25,8 @@ export interface UpgradeFixture {
   dir: string;
   /** where the vendored versions live, outside the repo */
   registry: string;
-  /** an upgrade target string for one of the vendored versions */
-  target(version: string): string;
+  /** an upgrade target string for one of the vendored versions (defaults to the greeter package) */
+  target(version: string, pkg?: string): string;
   /** the parent to delete when done */
   root: string;
 }
@@ -85,7 +85,7 @@ export function makeUpgradeRepo(options: { install?: boolean } = {}): UpgradeFix
     dir,
     registry,
     root,
-    target: (version: string) => `greeter@file:${path.join(registry, `greeter-${version}`)}`,
+    target: (version: string, pkg = "greeter") => `${pkg}@file:${path.join(registry, `${pkg}-${version}`)}`,
   };
 }
 

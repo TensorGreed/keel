@@ -169,10 +169,17 @@ broken.
       existing `requireDecisionReview` rule, like any other change). And the flywheel: a repair that
       reaches green is written back to the event log as an `upgrade_repair` event, so the next
       upgrade of that package starts from the migration the first one worked out.
-- [ ] **Phase 3 — batch + policy.** Many packages in one pass, ordered by blast radius and risk;
-      `keel.policy.json` gains upgrade rules (what may auto-merge on green, what always needs a
-      human, which packages are pinned and why). The output is a set of PRs, each carrying its own
-      executed proof.
+- [x] **Phase 3 — batch + policy.** `keel upgrade --batch` and the `upgrade_batch` MCP tool. Every
+      target is scoped from the graph first (cheap) and ranked by a risk score — reach, unproven
+      reach, version jump, and whether a recorded decision mentions it — then executed SAFEST FIRST
+      against one shared budget, so a truncated pass has landed the most mergeable upgrades. What it
+      never reached comes back as `not-run`, never as silence. `keel.policy.json` gains an
+      `upgrades` block: `autoMergeOnGreen`, `alwaysReview` globs, and `pinned` packages (a reason is
+      required — an unexplained pin is one the next person deletes). Outcomes: `pinned` (not
+      executed), `auto-merge`, `needs-review`, `blocked`, `not-run`. Each executed entry carries a PR
+      proposal — branch, title, a body containing the executed proof, an applicable manifest patch,
+      and the commands to open it. Keel composes those and does NOT push branches or open PRs:
+      pushing under someone's credentials isn't keel's to assume.
 
 ## Later
 

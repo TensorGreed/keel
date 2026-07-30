@@ -47,6 +47,21 @@ schemas may still change between minor versions. Breaking changes are called out
   `blocked` (nothing could be proven, e.g. the patch doesn't apply). Install-time breaks are
   `manifest` tasks and are issued first: until one is fixed, the tests ran against a tree the
   package never asked for. Exit codes: 0 green, 2 work remaining, 1 exhausted or blocked.
+- **Batch upgrades under policy (Phase 3).** `keel upgrade --batch <pkg>@<version> …` and the
+  `upgrade_batch` MCP tool. Targets are scoped from the graph first (cheap, no install) and ranked
+  by a risk score built from reach, unproven reach, version jump, and whether a recorded decision
+  mentions the package — the components are reported alongside the score so the ranking can be
+  argued with. They then execute **safest first** against one shared wall-clock budget, so a
+  truncated pass has completed the upgrades most likely to be mergeable; anything it never reached
+  is reported as `not-run` rather than silently omitted.
+  `keel.policy.json` gains an **`upgrades`** block — `autoMergeOnGreen`, `alwaysReview` package
+  globs, and `pinned: [{ package, reason }]` where the reason is **required**. Outcomes are `pinned`
+  (never executed), `auto-merge`, `needs-review`, `blocked`, `not-run`. `auto-merge` requires every
+  gate to line up: the policy opted in, the run was green, the package isn't reserved, no recorded
+  decision mentions it, no part of the surface is untested — and something was actually executed.
+  Each executed entry carries a **PR proposal**: branch, title, a markdown body with the executed
+  proof, a manifest patch `git apply` accepts, and the commands to open it. Keel composes these and
+  never pushes a branch or opens a PR.
 - **Memory-informed upgrades (Phase 2).** Both `keel upgrade` and the repair loop now consult the
   decision index *before* anything is proposed. **Pins** — decisions linked through the graph to the
   files importing the package, unioned with decisions that name the package — come back with their
@@ -59,6 +74,12 @@ schemas may still change between minor versions. Breaking changes are called out
   (idempotent by package + version + patch hash), so the next upgrade of that package starts from
   the migration the first one worked out. New `EventKind`: `upgrade_repair` — no schema migration,
   `kind` was already free text.
+- **A bump with no covering tests is no longer reported as a failed install.** The sandbox
+  short-circuits when there are no tests to run, so the install never happened — yet the report
+  claimed `install: FAILED` and the verdict said pass. The sandbox now runs a `prepare` step even
+  with zero tests (an install can fail, or warn about peers and engines, whether or not a test
+  covers it), and the install facts distinguish `ran: false` from `ok: false`. A clean install that
+  no test covers can never be classified `auto-merge`.
 - **The upgrade scope explains a zero.** A package linked to in-repo source — a workspace package,
   or a `file:`/`link:` dependency pointing inside the repo — resolves to real files, so it has no
   *external* import sites and previously reported a confident-looking `0`. It now says so, and

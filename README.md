@@ -75,6 +75,7 @@ MCP tools an agent calls (zod-validated input, structured JSON out, errors retur
 | `workspace_impact` | cross-repo blast radius (only when a `keel.workspace.json` is present) | workspace graph |
 | `upgrade_scope` | who imports a dependency, and what its bump actually breaks | graph + executed sim |
 | `upgrade_repair` | one turn of a repair loop: the next break, with the context to fix it | graph + executed sim |
+| `upgrade_batch` | many upgrades in one pass, ranked by risk and classified by policy | graph + executed sim + policy |
 
 CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>`):
 
@@ -90,7 +91,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `prompt-context` | Claude Code UserPromptSubmit hook: inject decisions relevant to the prompt |
 | `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
-| `upgrade` | scope a dependency upgrade and prove what it breaks; `--repair` for the agent loop, `--scope-only`, `--json` |
+| `upgrade` | scope a dependency upgrade and prove what it breaks; `--repair` for the agent loop, `--batch` for many, `--scope-only`, `--json` |
 | `doctor` | check the environment is healthy (Node/git, db, a timed graph build, runners, tokens, registration); `--json`, `--no-graph`, exit 1 on red |
 
 ## Quick start
@@ -160,6 +161,43 @@ Both the report and every repair task carry **team memory**, consulted before an
 - **Past repairs** — when a repair reaches green, keel records the patch that made it work. The next
   upgrade of that package starts from it. The second person to hit a breaking change shouldn't have
   to rediscover the migration the first one already worked out.
+
+### Many at once, under policy
+
+```bash
+keel upgrade --batch lodash@4.17.21 zod@3.23.0 react@19.0.0
+```
+
+Every target is scoped from the graph first, then ranked by risk — how much of the repo it reaches,
+how much of that reach no test proves, how far the version moves, and whether a recorded decision
+mentions it. The batch runs **safest first** against one shared budget, so a pass that runs out of
+time has finished the upgrades most likely to be mergeable. Whatever it never reached comes back as
+`not-run`; "we stopped looking" is never reported as "nothing found".
+
+`keel.policy.json` decides what each result means:
+
+```json
+{
+  "version": 1,
+  "upgrades": {
+    "autoMergeOnGreen": true,
+    "alwaysReview": ["react", "@acme/*"],
+    "pinned": [{ "package": "lodash", "reason": "held at 4.x — the 5.x codec breaks uploads, see #812" }]
+  }
+}
+```
+
+A pinned package is never executed (the reason is required — an unexplained pin is one the next
+person deletes). Everything else is classified `auto-merge`, `needs-review`, or `blocked`.
+`auto-merge` is the one outcome that removes a human from the loop, so it needs all of: the policy
+opted in, the run was green, the package isn't reserved, no recorded decision mentions it, and no
+part of the surface is untested — including the case where the install was clean but *no test covers
+the dependency at all*.
+
+Each executed entry carries a **PR proposal**: branch, title, a body containing the executed proof,
+a manifest patch `git apply` accepts, and the commands to open it. Keel composes these and **never
+pushes a branch or opens a PR** — that runs under your credentials against your remote, and it isn't
+keel's to assume.
 
 ## Mining decisions — model providers
 

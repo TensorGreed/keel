@@ -47,6 +47,8 @@ export interface UpgradeReport {
   installedVersion: string | null;
   scope: UpgradeScope;
   install: {
+    /** false when no install was attempted at all — which is NOT the same as one that failed */
+    ran: boolean;
     ok: boolean;
     exitCode: number | null;
     signals: InstallSignal[];
@@ -141,7 +143,7 @@ export async function runUpgradeAnalysis(
       from: declared?.spec ?? null,
       section: declared?.section ?? null,
       installedVersion: null,
-      install: { ok: true, exitCode: null, signals: [] },
+      install: { ran: false, ok: false, exitCode: null, signals: [] },
       executed: { status: "no-tests", runner: null, failures: [], discountedFlaky: [], durationMs: 0 },
       scopeOnly: true,
     });
@@ -167,7 +169,8 @@ export async function runUpgradeAnalysis(
     section: installed?.section ?? null,
     installedVersion: installed?.installedVersion ?? null,
     install: {
-      ok: !installed?.error && (installed?.exitCode === null || installed?.exitCode === 0),
+      ran: installed !== null,
+      ok: installed !== null && !installed.error && (installed.exitCode === null || installed.exitCode === 0),
       exitCode: installed?.exitCode ?? null,
       signals: installed?.signals ?? [],
       ...(installed?.error ? { error: installed.error } : {}),

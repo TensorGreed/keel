@@ -21,6 +21,26 @@ export interface ForbiddenImport {
   reason: string;
 }
 
+/** A dependency the policy says not to move, and why. The reason is required: a pin nobody can
+ *  explain is one the next person deletes. */
+export interface PinnedPackage {
+  package: string;
+  reason: string;
+}
+
+/**
+ * Upgrade rules (`keel upgrade`). Absent means: nothing auto-merges, nothing is pinned, everything
+ * is reviewed — the conservative reading, since an unconfigured repo has expressed no opinion.
+ */
+export interface UpgradePolicy {
+  /** a green upgrade may be auto-merged, unless it matches alwaysReview or is pinned */
+  autoMergeOnGreen: boolean;
+  /** package name globs that always need a human, however green the run was */
+  alwaysReview: string[];
+  /** packages that must not be upgraded at all, each with the reason */
+  pinned: PinnedPackage[];
+}
+
 export interface Policy {
   version: number;
   /** block when the file-level blast radius exceeds this; null = no cap */
@@ -39,7 +59,15 @@ export interface Policy {
   requireDecisionReview: boolean;
   /** warn when the change touches files whose top author isn't the committer */
   warnOnForeignCode: boolean;
+  /** how `keel upgrade` classifies a dependency bump */
+  upgrades: UpgradePolicy;
 }
+
+export const DEFAULT_UPGRADE_POLICY: UpgradePolicy = {
+  autoMergeOnGreen: false,
+  alwaysReview: [],
+  pinned: [],
+};
 
 /** Conservative defaults for a repo with no policy file: prove the change is safe to run,
  *  but don't gate on blast radius / coverage / decisions until a policy opts in. */
@@ -53,6 +81,7 @@ export const DEFAULT_POLICY: Policy = {
   forbiddenImports: [],
   requireDecisionReview: false,
   warnOnForeignCode: false,
+  upgrades: DEFAULT_UPGRADE_POLICY,
 };
 
 export interface LoadedPolicy {
@@ -125,7 +154,47 @@ export function parsePolicy(data: unknown): Policy | { error: string } {
     }
   }
 
-  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, forbiddenImports, requireDecisionReview, warnOnForeignCode };
+  const upgrades = parseUpgradePolicy(data["upgrades"]);
+  if ("error" in upgrades) return upgrades;
+
+  return { version: POLICY_VERSION, maxBlastRadius, requireSimPass, forbidUncoveredChanges, forbidTruncatedSim, protectedPaths, forbiddenImports, requireDecisionReview, warnOnForeignCode, upgrades };
+}
+
+/** Validate the `upgrades` block. Absent is the conservative default, not an error. */
+function parseUpgradePolicy(data: unknown): UpgradePolicy | { error: string } {
+  if (data === undefined) return DEFAULT_UPGRADE_POLICY;
+  if (!isObject(data)) return { error: '"upgrades" must be a JSON object' };
+
+  const autoMergeOnGreen = data["autoMergeOnGreen"];
+  if (autoMergeOnGreen !== undefined && typeof autoMergeOnGreen !== "boolean") {
+    return { error: '"upgrades.autoMergeOnGreen" must be a boolean' };
+  }
+
+  const alwaysReview: string[] = [];
+  if (data["alwaysReview"] !== undefined) {
+    if (!Array.isArray(data["alwaysReview"])) return { error: '"upgrades.alwaysReview" must be an array of package globs' };
+    for (const entry of data["alwaysReview"]) {
+      if (typeof entry !== "string" || entry === "") return { error: '"upgrades.alwaysReview" entries must be non-empty strings' };
+      alwaysReview.push(entry);
+    }
+  }
+
+  const pinned: PinnedPackage[] = [];
+  if (data["pinned"] !== undefined) {
+    if (!Array.isArray(data["pinned"])) return { error: '"upgrades.pinned" must be an array' };
+    for (const entry of data["pinned"]) {
+      if (!isObject(entry) || typeof entry["package"] !== "string" || typeof entry["reason"] !== "string") {
+        return { error: '"upgrades.pinned" entries must be { package: string, reason: string }' };
+      }
+      if (entry["package"] === "" || entry["reason"] === "") {
+        // A reason-less pin is the thing that rots: six months on, nobody knows if it still applies.
+        return { error: '"upgrades.pinned" package and reason must both be non-empty — a pin without a stated reason is unmaintainable' };
+      }
+      pinned.push({ package: entry["package"], reason: entry["reason"] });
+    }
+  }
+
+  return { autoMergeOnGreen: autoMergeOnGreen ?? DEFAULT_UPGRADE_POLICY.autoMergeOnGreen, alwaysReview, pinned };
 }
 
 /** Load keel.policy.json from the repo root. Missing -> defaults; malformed -> { error }. */

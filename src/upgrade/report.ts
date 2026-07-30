@@ -11,6 +11,7 @@
 import type { UpgradeFailure, UpgradeReport } from "./upgrade.js";
 import type { RepairStep, RepairTask } from "./repair.js";
 import type { UpgradeMemory } from "./memory.js";
+import type { BatchResult } from "./batch.js";
 
 const BULLET = "  •";
 
@@ -53,7 +54,15 @@ export function renderUpgradeReport(report: UpgradeReport): string {
 
   // --- install ---
   out.push("Install");
-  out.push(`  status: ${report.install.ok ? "completed" : `FAILED${report.install.exitCode !== null ? ` (exit ${report.install.exitCode})` : ""}`}`);
+  out.push(
+    `  status: ${
+      !report.install.ran
+        ? "NOT RUN — no covering tests and nothing to install against"
+        : report.install.ok
+          ? "completed"
+          : `FAILED${report.install.exitCode !== null ? ` (exit ${report.install.exitCode})` : ""}`
+    }`,
+  );
   if (report.install.error) out.push(`  error:  ${report.install.error}`);
   if (report.install.signals.length === 0) {
     out.push("  no peer-dependency or engine problems reported");
@@ -282,4 +291,64 @@ function renderEvidence(evidence: RepairTask["evidence"]): string[] {
 function indent(text: string, spaces: number): string {
   const pad = " ".repeat(spaces);
   return text.split("\n").map((l) => pad + l).join("\n");
+}
+
+/** Icons for a batch summary line — outcome is the first thing a reader should be able to scan. */
+const OUTCOME_MARK: Record<string, string> = {
+  "auto-merge": "✓",
+  "needs-review": "·",
+  blocked: "✗",
+  pinned: "⊘",
+  "not-run": "?",
+};
+
+/**
+ * Rendering a batch. Ordered as it ran — safest first — with the risk score and its components
+ * shown, so the ranking can be argued with rather than trusted. The summary leads because the
+ * question a batch answers is "how much of this can I merge?", and `not-run` is called out
+ * separately because "we didn't look" must never read like "nothing found".
+ */
+export function renderBatchResult(result: BatchResult): string {
+  const out: string[] = [];
+  const s = result.summary;
+  out.push(`keel upgrade --batch — ${result.entries.length} package(s)`);
+  out.push(
+    `  ${s["auto-merge"]} auto-merge · ${s["needs-review"]} need review · ${s.blocked} blocked · ` +
+      `${s.pinned} pinned · ${s["not-run"]} NOT RUN`,
+  );
+  out.push(`  budget ${result.budget.usedSeconds}s of ${result.budget.maxSeconds}s${result.budget.exhausted ? " — EXHAUSTED" : ""}`);
+  out.push(`  policy: ${result.policySource === "file" ? "keel.policy.json" : "defaults (nothing can auto-merge)"}`);
+  out.push("");
+
+  out.push("Ranked by risk, and run in this order (safest first, so a truncated batch lands the most)");
+  for (const entry of result.entries) {
+    const f = entry.riskFactors;
+    out.push(
+      `${BULLET} ${OUTCOME_MARK[entry.outcome] ?? "·"} ${entry.package}@${entry.requested} ` +
+        `— ${entry.outcome} (risk ${entry.risk.toFixed(2)})`,
+    );
+    out.push(`      ${entry.reason}`);
+    out.push(
+      `      risk from: ${(f.shareOfRepo * 100).toFixed(1)}% of repo, ` +
+        `${(f.uncoveredShare * 100).toFixed(0)}% of surface untested, ${f.versionJump} version jump` +
+        `${f.pinnedByDecision ? ", a recorded decision mentions it" : ""}`,
+    );
+    if (entry.pr) out.push(`      PR ready: ${entry.pr.branch}${entry.pr.autoMergeable ? " (auto-mergeable)" : ""}`);
+  }
+  out.push("");
+
+  const proposals = result.entries.filter((e) => e.pr);
+  if (proposals.length > 0) {
+    out.push(`${proposals.length} PR proposal(s) — keel composed these; it does NOT push branches or open PRs.`);
+    out.push("  Each body carries the executed proof. Run the commands yourself, or take them from --json:");
+    for (const entry of proposals.slice(0, 3)) {
+      out.push(`${BULLET} ${entry.pr!.title}`);
+      for (const command of entry.pr!.commands) out.push(indent(command, 6));
+    }
+    if (proposals.length > 3) out.push(`     … ${proposals.length - 3} more in --json`);
+    out.push("");
+  }
+
+  for (const note of result.notes) out.push(`note: ${note}`);
+  return out.join("\n");
 }
