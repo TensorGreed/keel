@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getImpact, type ImpactResult } from "../src/simulate/impact.js";
 import { loadGraph, resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 function git(dir: string, args: string[]): void {
   execFileSync("git", args, {
@@ -66,7 +67,7 @@ describe("diff -> impacted subgraph", () => {
     dir = initRepo();
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
   beforeEach(() => {
     resetGraphCache();
@@ -221,7 +222,7 @@ describe("impact from the working tree", () => {
     resetGraphCache();
   });
   afterAll(() => {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    if (dir) rmDir(dir);
   });
 
   it("uses uncommitted changes when no diff is given", async () => {
@@ -247,7 +248,7 @@ describe("intra-file reference closure", () => {
   const repos: string[] = [];
 
   afterAll(() => {
-    for (const dir of repos) fs.rmSync(dir, { recursive: true, force: true });
+    for (const dir of repos) rmDir(dir);
   });
 
   function repoWith(files: Record<string, string>): string {

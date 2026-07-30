@@ -1,8 +1,8 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { npmSync } from "./helpers/platform.js";
 
 // Publish-readiness guard: the npm tarball must ship the runnable package and nothing else.
 // We drive the real `npm pack --dry-run` so this tracks whatever "files" + npm defaults resolve
@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 function packedFiles(): string[] {
-  const out = execFileSync("npm", ["pack", "--dry-run", "--json"], { cwd: repoRoot, encoding: "utf8" });
+  const out = npmSync(["pack", "--dry-run", "--json"], { cwd: repoRoot });
   const parsed = JSON.parse(out) as { files: { path: string }[] }[];
   return parsed[0]!.files.map((f) => f.path);
 }
@@ -22,7 +22,7 @@ describe("npm package tarball", () => {
   beforeAll(() => {
     // pack lists dist/ only if it's been built; build once if a clean checkout hasn't.
     if (!fs.existsSync(path.join(repoRoot, "dist", "index.js"))) {
-      execFileSync("npm", ["run", "build"], { cwd: repoRoot, stdio: "ignore" });
+      npmSync(["run", "build"], { cwd: repoRoot, stdio: "ignore" });
     }
     files = packedFiles();
   }, 120_000);

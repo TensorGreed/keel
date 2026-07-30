@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseRemoteUrl, parseSlug, resolveRepoRef } from "../src/github/remote.js";
+import { rmDir } from "./helpers/platform.js";
 
 describe("parseRemoteUrl", () => {
   it("parses https, ssh, and ssh:// forms, with or without .git", () => {
@@ -40,7 +41,7 @@ describe("resolveRepoRef", () => {
       execFileSync("git", ["remote", "add", "origin", "git@github.com:anthropics/keel.git"], { cwd: dir });
       expect(await resolveRepoRef(dir)).toEqual({ owner: "anthropics", repo: "keel" });
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      rmDir(dir);
     }
   });
 
@@ -51,7 +52,7 @@ describe("resolveRepoRef", () => {
       const ref = await resolveRepoRef(dir);
       expect("error" in ref).toBe(true);
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+      rmDir(dir);
     }
   });
 });

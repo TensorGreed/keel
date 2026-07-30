@@ -6,6 +6,7 @@ import { registerTools } from "../src/mcp/tools.js";
 import { SqliteEventStore } from "../src/events/sqlite-store.js";
 import type { KeelEvent } from "../src/events/store.js";
 import { resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 // get_dependencies / get_impact append a "call why" notice when their result files carry recorded
 // decisions — so memory surfaces even when the agent read the code and never asked. Mock server.
@@ -40,7 +41,7 @@ beforeEach(() => {
   write(dir, "src/crypto.ts", "export function iv(): number { return 1; }\n");
   write(dir, "src/service.ts", 'import { iv } from "./crypto.js";\nexport const use = iv();\n');
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmDir(dir));
 
 describe("get_dependencies decision notice", () => {
   it("appends a 'call why' notice when a dependency carries a recorded decision", async () => {

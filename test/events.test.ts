@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { SqliteEventStore } from "../src/events/sqlite-store.js";
 import { ingestCommits } from "../src/events/ingest.js";
+import { rmDir } from "./helpers/platform.js";
 
 /** Build a throwaway git repo with deterministic identities and author dates. */
 function initRepo(): string {
@@ -46,7 +47,7 @@ describe("SqliteEventStore commit ingestion", () => {
   });
 
   afterAll(() => {
-    fs.rmSync(repo, { recursive: true, force: true });
+    rmDir(repo);
   });
 
   it("populates events and event_files from git", async () => {
@@ -124,7 +125,7 @@ describe("SqliteEventStore commit ingestion", () => {
       expect(result.ingested).toBe(0);
       store.close();
     } finally {
-      fs.rmSync(empty, { recursive: true, force: true });
+      rmDir(empty);
     }
   });
 });

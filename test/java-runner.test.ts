@@ -7,6 +7,7 @@ import { preflight } from "../src/simulate/preflight.js";
 import { classifyJavaBuildFailure, javaClassName, javaResults } from "../src/simulate/sandbox.js";
 import { resetGraphCache } from "../src/graph/cache.js";
 import { initGraphScanners } from "../src/graph/scanners.js";
+import { IS_WINDOWS, rmDir, toolSync } from "./helpers/platform.js";
 
 // The Java sandbox runner. The report-parsing/attribution logic and the build-failure classifier are
 // pure functions, unit-tested here against recorded output — no JDK, no network. The
@@ -16,7 +17,7 @@ import { initGraphScanners } from "../src/graph/scanners.js";
 
 function hasMaven(): boolean {
   try {
-    execFileSync("mvn", ["-version"], { stdio: "ignore" });
+    toolSync("mvn", ["-version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -112,7 +113,7 @@ function probeJavaBuild(): BuildProbe {
     write(d, "src/main/java/com/example/app/Service.java", "package com.example.app;\n\npublic class Service {\n  public int run() { return 13; }\n}\n");
     write(d, "src/test/java/com/example/app/ServiceTest.java", "package com.example.app;\n\nimport org.junit.Test;\n\npublic class ServiceTest {\n  @Test public void t() {}\n}\n");
     try {
-      execFileSync("mvn", ["-B", "-DskipTests", "test-compile"], { cwd: d, stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
+      toolSync("mvn", ["-B", "-DskipTests", "test-compile"], { cwd: d, stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
       return { ok: true, reason: "" };
     } catch (e) {
       const err = e as { stdout?: Buffer | string; stderr?: Buffer | string };
@@ -124,7 +125,7 @@ function probeJavaBuild(): BuildProbe {
       return { ok: false, reason: "maven could not build the probe project" };
     }
   } finally {
-    fs.rmSync(d, { recursive: true, force: true });
+    rmDir(d);
   }
 }
 const JAVA_BUILD = probeJavaBuild();
@@ -137,7 +138,7 @@ beforeEach(() => {
   resetGraphCache();
   dir = makeMavenRepo();
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmDir(dir));
 
 describe("java runner — pure report parsing (always)", () => {
   it("derives a fully-qualified class name from a selected test file path", () => {
@@ -197,7 +198,11 @@ describe("java runner — pure report parsing (always)", () => {
   });
 });
 
-describe("java runner — orchestration via a stub wrapper (always)", () => {
+// POSIX-only: these stubs are `#!/bin/sh` wrappers that write a Surefire report from a heredoc.
+// A cmd.exe equivalent would have to escape the XML's quotes and angle brackets line by line —
+// more fragile than the thing it tests. Windows coverage of the same wiring comes from the pure
+// report-parsing suite above (which is platform-independent) plus the real-toolchain suite below.
+describe.skipIf(IS_WINDOWS)("java runner — orchestration via a stub wrapper (POSIX: needs a shell wrapper)", () => {
   // Exercise the whole runner end-to-end without a real toolchain: a ./mvnw wrapper that just writes
   // a Surefire report and exits. This proves the wrapper is preferred and invoked, the report is
   // collected from target/surefire-reports, and the failure is attributed back to the test file —
@@ -233,7 +238,7 @@ exit 1
       expect(failure!.graphPath).toEqual([TEST_FILE, "src/main/java/com/example/app/Service.java"]);
       expect(failure!.trace).toContain("ServiceTest.java:8");
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 
@@ -258,7 +263,7 @@ exit 1
       const evidence = `${pf.executed.output ?? ""}\n${pf.executed.failures.map((f) => `${f.message}\n${f.trace ?? ""}`).join("\n")}`;
       expect(evidence).toContain("cannot find symbol");
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 
@@ -273,7 +278,7 @@ exit 1
       expect(pf.executed.runner).toBe("mvn");
       expect(pf.executed.error).toMatch(/build environment could not be prepared/);
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 });

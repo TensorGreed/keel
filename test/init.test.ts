@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { initMcpConfig, writeClaudeMdGuidance, writeSettingsHook } from "../src/init.js";
+import { rmDir } from "./helpers/platform.js";
 
 let dir: string;
 
@@ -10,7 +11,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-init-"));
 });
 afterEach(() => {
-  fs.rmSync(dir, { recursive: true, force: true });
+  rmDir(dir);
 });
 
 function readConfig(): Record<string, unknown> {

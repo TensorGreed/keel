@@ -1,0 +1,9 @@
+# Keel's test fixtures are byte-exact inputs: the graph scanners tokenize them, the diff parser
+# matches hunk bodies against them line for line, and several tests assert on exact strings. A
+# CRLF working tree would change those bytes, so pin the checkout to LF on every platform
+# regardless of the contributor's core.autocrlf. (The Windows CI leg turns autocrlf off too.)
+* text=auto eol=lf
+
+# Never touched: the tree-sitter grammars and the phase-0 git bundle.
+*.wasm binary
+*.bundle binary

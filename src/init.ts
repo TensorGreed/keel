@@ -7,6 +7,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolveOnPath } from "./util/platform.js";
 
 const CONFIG_FILE = ".mcp.json";
 const DEFAULT_SERVER_NAME = "keel";
@@ -203,30 +204,13 @@ export function writeSettingsHook(dir: string, command: string): SettingsResult 
   return { path: filePath, action: existed ? "updated" : "created" };
 }
 
-/** Is `name` a runnable executable on the current PATH? Dependency-free; Windows-aware. */
-function isExecutableOnPath(name: string): boolean {
-  const dirs = (process.env["PATH"] ?? "").split(path.delimiter).filter(Boolean);
-  const exts = process.platform === "win32" ? ["", ".cmd", ".exe", ".bat"] : [""];
-  for (const dir of dirs) {
-    for (const ext of exts) {
-      try {
-        fs.accessSync(path.join(dir, name + ext), fs.constants.X_OK);
-        return true;
-      } catch {
-        // not here; keep looking
-      }
-    }
-  }
-  return false;
-}
-
 /**
  * The command to launch keel when the user doesn't pass --command. Prefer the bare `keel`
  * binary if it's on PATH; otherwise fall back to `npx -y <published-name>`, which fetches and
  * runs the package on demand — no global install required. Detected, never assumed.
  */
 export function detectDefaultCommand(): { command: string; onPath: boolean } {
-  return isExecutableOnPath(DEFAULT_COMMAND)
+  return resolveOnPath(DEFAULT_COMMAND) !== null
     ? { command: DEFAULT_COMMAND, onPath: true }
     : { command: `npx -y ${PUBLISHED_NAME}`, onPath: false };
 }

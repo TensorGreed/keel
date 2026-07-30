@@ -59,8 +59,11 @@ src/
                     with one named fix each), cli.ts (defensive real-env probes; table + --json,
                     exit 1 on red). Bounded probes via util/timeouts (2s GitHub/Ollama leash)
   util/             timeouts.ts (central timeout policy + fetchTimed/execFileTimed/withProgress for
-                    every outbound call; audited by test/timeout-audit.test.ts) and sanitize.ts
-                    (neutralize+cap attacker-influenced decision text before it reaches an agent)
+                    every outbound call; audited by test/timeout-audit.test.ts), sanitize.ts
+                    (neutralize+cap attacker-influenced decision text before it reaches an agent),
+                    and platform.ts (every Windows-vs-POSIX difference in one place: PATHEXT-aware
+                    resolveOnPath, spawnSpec for .cmd/.bat shims, linkDir/unlinkDir junctions,
+                    localPackageBin, canonicalPath — pure logic, so outside the timeout audit)
   init.ts           `keel init`: register keel in a project's .mcp.json + add a "Working with
                     Keel" guidance section to the repo's CLAUDE.md (idempotent markers; --no-claude-md)
                     + install the prompt-context UserPromptSubmit hook in .claude/settings.json

@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseJestJson, runSandbox } from "../src/simulate/sandbox.js";
+import { rmDir } from "./helpers/platform.js";
 
 function git(dir: string, args: string[]): void {
   execFileSync("git", args, {
@@ -63,7 +64,7 @@ describe("sandbox runner", () => {
     dir = initRepo();
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("passes when the selected tests pass on unchanged code", async () => {

@@ -7,6 +7,7 @@ import { SqliteEventStore } from "../src/events/sqlite-store.js";
 import { ciRunEvent } from "../src/ci/ingest.js";
 import { computeVerdict, type Verdict } from "../src/trust/verdict.js";
 import { resetGraphCache } from "../src/graph/cache.js";
+import { linkNodeModules, rmDir } from "./helpers/platform.js";
 
 // End-to-end flywheel: CI history says "sum adds" is flaky; a real sim failure of that same test
 // is discounted by the verdict (warn, not block). Without the CI history, it blocks.
@@ -52,9 +53,9 @@ describe("flaky discounting, end to end", () => {
     write(dir, "sum.test.ts", 'import { test, expect } from "vitest";\nimport { sum } from "./sum.js";\ntest("sum adds", () => {\n  expect(sum(2, 3)).toBe(5);\n});\n');
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "init"]);
-    fs.symlinkSync(KEEL_NODE_MODULES, path.join(dir, "node_modules"), "dir"); // share keel's vitest
+    linkNodeModules(KEEL_NODE_MODULES, dir); // share keel's vitest
   });
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterAll(() => rmDir(dir));
   beforeEach(() => resetGraphCache());
 
   it("blocks the failing change when there is no flaky history", async () => {

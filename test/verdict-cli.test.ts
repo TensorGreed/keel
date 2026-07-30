@@ -19,6 +19,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import { resetGraphCache } from "../src/graph/cache.js";
 import { runVerdict } from "../src/trust/verdict-cli.js";
+import { rmDir } from "./helpers/platform.js";
 
 // `keel verdict` end-to-end: the same trust-layer computation as the MCP tool, driven from
 // the CLI the way a CI check or a Claude Code hook drives it. Exit codes: 0 pass/warn, 2 block,
@@ -65,7 +66,7 @@ describe("runVerdict (keel verdict CLI)", () => {
     git(dir, ["commit", "-qm", "init"]);
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   beforeEach(() => {

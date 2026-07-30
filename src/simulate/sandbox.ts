@@ -19,6 +19,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseJUnit } from "../ci/junit.js";
 import { pythonModuleRoots } from "../graph/python-scanner.js";
+import { IS_WINDOWS, linkDir, localPackageBin, resolveOnPath, spawnSpec, unlinkDir } from "../util/platform.js";
 import { execFileTimed, PROGRESS_THRESHOLD_MS, runnerTimeoutMs } from "../util/timeouts.js";
 
 const DEFAULT_MAX_TESTS = 50;
@@ -90,9 +91,13 @@ function runProcess(
   args: string[],
   opts: { cwd: string; timeoutMs: number; env?: Record<string, string> },
 ): Promise<ProcResult> {
+  // On Windows a build tool is usually a .cmd/.bat shim, which CreateProcess can't run and which
+  // Node refuses to spawn without a shell; spawnSpec settles that (and pre-quotes for cmd.exe).
+  const spec = spawnSpec(command, args);
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
+    const child = spawn(spec.command, spec.args, {
       cwd: opts.cwd,
+      shell: spec.shell,
       env: { ...process.env, CI: "true", FORCE_COLOR: "0", ...opts.env },
     });
     let stdout = "";
@@ -110,7 +115,7 @@ function runProcess(
     }, PROGRESS_THRESHOLD_MS);
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      killTree(child);
     }, opts.timeoutMs);
     child.on("error", (err) => {
       settled = true;
@@ -125,6 +130,26 @@ function runProcess(
       resolve({ stdout, stderr, code, timedOut });
     });
   });
+}
+
+/**
+ * Kill a timed-out runner and everything it started. On POSIX a SIGKILL to the child is enough
+ * for our purposes (the test runners we spawn don't outlive their parent). On Windows a batch
+ * shim runs under cmd.exe, so killing the child would leave the real build (`java`, `go`, …)
+ * running unbounded — which would break "no hangs, ever". `taskkill /T /F` takes the tree.
+ */
+function killTree(child: ReturnType<typeof spawn>): void {
+  if (IS_WINDOWS && child.pid !== undefined) {
+    const taskkill = resolveOnPath("taskkill");
+    if (taskkill) {
+      try {
+        spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { stdio: "ignore" }).unref();
+      } catch {
+        /* fall through to the direct kill below */
+      }
+    }
+  }
+  child.kill("SIGKILL");
 }
 
 async function git(cwd: string, args: string[]): Promise<{ stdout: string } | null> {
@@ -178,21 +203,22 @@ interface Interpreter {
 
 /**
  * The Python interpreter to run pytest with: the repo's virtualenv when present (the analog of
- * symlinking node_modules — it carries the project's installed deps), else `python3` on PATH.
+ * linking node_modules — it carries the project's installed deps), else the interpreter on PATH.
+ *
+ * A venv puts its interpreter under `bin/python` on POSIX and `Scripts\python.exe` on Windows, so
+ * both layouts are probed for each venv location. The PATH fallback is `python3` on POSIX but
+ * `python` on Windows: `python3` there is usually absent, or a Microsoft Store stub that opens the
+ * Store instead of running anything.
  */
 function findPythonInterpreter(repoRoot: string): Interpreter {
   const venv = process.env["VIRTUAL_ENV"];
-  const candidates = [
-    venv ? path.join(venv, "bin", "python") : null,
-    path.join(repoRoot, ".venv", "bin", "python"),
-    path.join(repoRoot, "venv", "bin", "python"),
-    venv ? path.join(venv, "Scripts", "python.exe") : null,
-    path.join(repoRoot, ".venv", "Scripts", "python.exe"),
-  ].filter((p): p is string => p !== null);
+  const roots = [venv, path.join(repoRoot, ".venv"), path.join(repoRoot, "venv")].filter((p): p is string => Boolean(p));
+  const candidates = roots.flatMap((r) => [path.join(r, "bin", "python"), path.join(r, "Scripts", "python.exe")]);
   for (const cmd of candidates) {
     if (isFile(cmd)) return { cmd, label: cmd.startsWith(repoRoot + path.sep) ? path.relative(repoRoot, cmd) : cmd };
   }
-  return { cmd: "python3", label: "python3" };
+  const onPath = IS_WINDOWS ? "python" : "python3";
+  return { cmd: onPath, label: onPath };
 }
 
 /** The concrete exception line from a traceback body (e.g. "ModuleNotFoundError: No module ...").
@@ -379,15 +405,24 @@ async function applyChange(
   }
 }
 
+/**
+ * How to invoke the detected JS runner in the worktree.
+ *
+ * The runner is already installed (that's how detectRunner found it in package.json, and the
+ * worktree shares the repo's node_modules), so we resolve its own JS entry from its `bin` field
+ * and run it with `process.execPath`. That is identical on every platform — unlike `npx`, which
+ * adds a process layer and is a `.cmd` shim on Windows, and unlike `node_modules/.bin/vitest`,
+ * whose POSIX entry is a shebang script Windows cannot execute. `npx --no-install` stays as the
+ * fallback for the odd layout where the bin field doesn't resolve.
+ */
 function runnerCommand(runner: "vitest" | "jest" | "node", worktree: string, testFiles: string[], jsonFile: string): [string, string[]] {
-  switch (runner) {
-    case "vitest":
-      return ["npx", ["--no-install", "vitest", "run", ...testFiles, "--reporter=json", `--outputFile=${jsonFile}`]];
-    case "jest":
-      return ["npx", ["--no-install", "jest", ...testFiles, "--json", `--outputFile=${jsonFile}`]];
-    case "node":
-      return [process.execPath, ["--test", ...testFiles]];
-  }
+  if (runner === "node") return [process.execPath, ["--test", ...testFiles]];
+  const runnerArgs =
+    runner === "vitest"
+      ? ["run", ...testFiles, "--reporter=json", `--outputFile=${jsonFile}`]
+      : [...testFiles, "--json", `--outputFile=${jsonFile}`];
+  const bin = localPackageBin(worktree, runner, runner);
+  return bin ? [process.execPath, [bin, ...runnerArgs]] : ["npx", ["--no-install", runner, ...runnerArgs]];
 }
 
 /** A conftest pytest reported as fatal to load, and the exception line to show for it. */
@@ -997,14 +1032,18 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
 
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), "keel-sandbox-"));
   const worktree = path.join(parent, "wt");
-  // Tear down in order and awaited: remove the worktree (registration + dir), then rmSync
-  // the parent as a fallback, then always prune so a failed remove can't leave a stale
-  // entry in the main repo's .git/worktrees. Racing rmSync against a fire-and-forget remove
-  // would let cleanup finish after the caller returns and orphan the registration.
+  const linkedModules = path.join(worktree, "node_modules");
+  // Tear down in order and awaited: drop the node_modules link explicitly (so nothing recursive
+  // can follow it into the main repo's real tree — a junction in particular is rmdir-shaped, not
+  // unlink-shaped), remove the worktree (registration + dir), then rmSync the parent as a
+  // fallback, then always prune so a failed remove can't leave a stale entry in the main repo's
+  // .git/worktrees. Racing rmSync against a fire-and-forget remove would let cleanup finish after
+  // the caller returns and orphan the registration.
   const cleanup = async (): Promise<void> => {
+    unlinkDir(linkedModules);
     await git(repoRoot, ["worktree", "remove", "--force", worktree]);
     try {
-      fs.rmSync(parent, { recursive: true, force: true });
+      fs.rmSync(parent, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     } catch {
       /* ignore */
     }
@@ -1015,15 +1054,10 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     const added = await git(repoRoot, ["worktree", "add", "--detach", worktree, "HEAD"]);
     if (!added) return done({ status: "error", runner: null, ranTests, error: "could not create git worktree" });
 
-    // Share deps without a reinstall: symlink node_modules if the main repo has it.
+    // Share deps without a reinstall: link node_modules if the main repo has it. A failure isn't
+    // fatal — tests may still run for a zero-dep (node:test) repo.
     const mainModules = path.join(repoRoot, "node_modules");
-    if (fs.existsSync(mainModules) && !fs.existsSync(path.join(worktree, "node_modules"))) {
-      try {
-        fs.symlinkSync(mainModules, path.join(worktree, "node_modules"), "dir");
-      } catch {
-        /* tests may still run for zero-dep (node:test) repos */
-      }
-    }
+    if (fs.existsSync(mainModules) && !fs.existsSync(linkedModules)) linkDir(mainModules, linkedModules);
 
     const applyError = await applyChange(repoRoot, worktree, options.diff);
     if (applyError) return done({ status: "apply-failed", runner: null, ranTests, error: applyError, ...(capped ? { capped } : {}) });

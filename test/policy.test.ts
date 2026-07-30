@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { DEFAULT_POLICY, globMatch, loadPolicy, parsePolicy } from "../src/trust/policy.js";
+import { rmDir } from "./helpers/platform.js";
 
 describe("globMatch", () => {
   it("matches * within a segment and ** across segments", () => {
@@ -55,7 +56,7 @@ describe("loadPolicy", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-policy-"));
   });
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("returns conservative defaults when no file exists", () => {

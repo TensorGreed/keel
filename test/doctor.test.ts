@@ -11,6 +11,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { doctorExitCode, renderDoctorTable, runDoctorChecks, type CheckResult, type DoctorEnv } from "../src/doctor/doctor.js";
 import { gatherDoctorEnv } from "../src/doctor/cli.js";
+import { rmDir } from "./helpers/platform.js";
 
 function baseEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
   return {
@@ -126,7 +127,7 @@ describe("gatherDoctorEnv — real probes, hermetic", () => {
     process.env["KEEL_OLLAMA_URL"] = "http://127.0.0.1:1"; // a dead port — probe fails fast, never hangs
   });
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
     if (saved.token === undefined) delete process.env["GITHUB_TOKEN"]; else process.env["GITHUB_TOKEN"] = saved.token;
     if (saved.ollama === undefined) delete process.env["KEEL_OLLAMA_URL"]; else process.env["KEEL_OLLAMA_URL"] = saved.ollama;
   });

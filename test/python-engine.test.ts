@@ -8,6 +8,7 @@ import { changedRoots, selectTests } from "../src/simulate/select-tests.js";
 import { loadGraph, loadHeadGraph, resetGraphCache } from "../src/graph/cache.js";
 import { reportFor } from "../src/graph/dependencies.js";
 import { initPythonScanner } from "../src/graph/python-scanner.js";
+import { rmDir } from "./helpers/platform.js";
 
 // The scoping engines (impact, select_tests) and preflight on a pure-Python repo. Graph
 // analysis and test selection work; the sim runner is JS-only, so preflight says so honestly.
@@ -52,7 +53,7 @@ describe("pure-Python repo: impact, select_tests, preflight", () => {
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "init"]);
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => rmDir(dir));
 
   it("get_impact maps a .py change to its dependents", async () => {
     const impact = await getImpact(dir, { diff: BREAK_CALC });
@@ -84,7 +85,7 @@ describe("incremental rescan of a .py file", () => {
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "init"]);
   });
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+  afterEach(() => rmDir(dir));
 
   it("rescans only the edited .py and picks up its new edge", async () => {
     const first = await loadGraph(dir); // builds + writes the disk cache (tree clean)

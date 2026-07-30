@@ -58,8 +58,11 @@ describe("timeout audit: every outbound call site declares a timeout", () => {
   it("sandbox.ts's own spawn() is the only exempted process-supervision call, and stays timeout-bounded", () => {
     const content = fs.readFileSync(SANDBOX_SPAWN_FILE, "utf8");
     expect(content).toMatch(/import\s*\{\s*spawn\s*\}\s*from\s*"node:child_process"/);
-    // The spawned child must be killed on a timer, not left to run unbounded.
-    expect(content).toMatch(/setTimeout\(\(\)\s*=>\s*\{[\s\S]*?child\.kill/);
+    // The spawned child must be killed on a timer, not left to run unbounded — and the kill has to
+    // take the whole tree, since on Windows the runner sits under a cmd.exe shim whose death would
+    // otherwise leave the real build (java, go, …) running.
+    expect(content).toMatch(/setTimeout\(\(\)\s*=>\s*\{[^}]*killTree\(child\)/);
+    expect(content).toMatch(/function killTree\([\s\S]*?child\.kill\(/);
   });
 
   it("src/util/timeouts.ts exports a timeout getter for every category the audit covers", () => {

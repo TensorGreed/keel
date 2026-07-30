@@ -101,6 +101,13 @@ process could hang, corrupt state, or carry hostile text into an agent's context
 - **`keel init` writes agent guidance.** Beyond registering the server in `.mcp.json`, it
   appends a "Working with Keel" section to the repo's `CLAUDE.md` behind idempotent markers
   (`--no-claude-md` to skip).
+- **Windows support, tested in CI.** The test matrix gains a `windows-latest` leg (Node 22 only,
+  to bound minutes) and the suite is green there. Platform differences now live in one place,
+  `src/util/platform.ts`: PATHEXT-aware PATH resolution, `.cmd`/`.bat` shims routed through a
+  shell with cmd.exe quoting, directory *junctions* instead of symlinks (no elevation needed),
+  and one canonical path form for containment checks. A `.gitattributes` pins the working tree
+  to LF on every platform, since the fixtures are byte-exact parser inputs. Three test suites
+  whose stubs are `#!/bin/sh` scripts skip on Windows with the reason stated; nothing fails.
 
 ### Changed
 
@@ -127,6 +134,27 @@ process could hang, corrupt state, or carry hostile text into an agent's context
 
 ### Fixed
 
+- **Windows: the JS sandbox runner could not start.** It shelled out to `npx`, which is a `.cmd`
+  shim there — and since Node 20.12 `spawn` refuses a `.cmd` without a shell. The runner now
+  resolves the installed runner's own JS entry from its `bin` field and runs it with
+  `process.execPath`, which is identical on every platform and drops a process layer everywhere.
+- **Windows: Maven and Gradle were reported missing when installed.** Both `keel doctor`'s runner
+  probe and the Java test runner tried to exec a bare `mvn`/`gradle`, which resolves to a batch
+  shim. Presence is now resolved on PATH, and a shim is invoked through cmd.exe.
+- **Windows: a timed-out runner leaked its build.** Killing a batch-shim child killed cmd.exe and
+  left the real `java`/`go` process running, against the "no hangs, ever" promise; the timeout now
+  kills the process tree.
+- **A repo reached through a symlink or an 8.3 short path built an empty graph.** Import
+  resolution realpaths the files it finds, so every `startsWith(root)` containment check failed
+  unless the root was in the same space — which it wasn't for a repo under `%TEMP%` on a CI runner
+  (`C:\Users\RUNNER~1\…`) or under macOS's `/var` → `/private/var`. Both sides now go through one
+  canonicalization.
+- **Windows: the sandbox's shared `node_modules` link.** Created as a junction rather than a
+  `"dir"` symlink (which needs Developer Mode or elevation), and explicitly removed during
+  teardown so no recursive delete can follow it into the main repo's real tree.
+- The pytest runner probes both venv layouts (`bin/python` and `Scripts\python.exe`) for every
+  candidate venv, and falls back to `python` rather than `python3` on Windows, where `python3` is
+  usually absent or a Store stub.
 - Workspace version skew now warns, and the checkout-vs-runtime caveat is documented.
 - A `failed` preflight status always carries at least one failure — never failed-with-empty.
 - `keel mine` is incremental: it tracks which PRs it has mined under *any* outcome, so a

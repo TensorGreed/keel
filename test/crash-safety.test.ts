@@ -10,11 +10,12 @@
  * first, so this is usually a no-op).
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { SqliteEventStore } from "../src/events/sqlite-store.js";
+import { npmSync, rmDir } from "./helpers/platform.js";
 
 const ROOT = path.resolve(import.meta.dirname, "..");
 const HARNESS = path.join(ROOT, "test", "fixtures", "crash", "harness.mjs");
@@ -31,7 +32,7 @@ function ensureBuilt(): void {
     fs.existsSync(DIST_STORE) &&
     srcs.every((s) => !fs.existsSync(s) || fs.statSync(s).mtimeMs <= fs.statSync(DIST_STORE).mtimeMs);
   if (fresh) return;
-  execFileSync("npm", ["run", "build"], { cwd: ROOT, stdio: "ignore" });
+  npmSync(["run", "build"], { cwd: ROOT, stdio: "ignore" });
 }
 
 let dir: string;
@@ -41,7 +42,7 @@ beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-crash-"));
   dbPath = path.join(dir, ".keel", "events.db");
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmDir(dir));
 
 function spawnHarness(mode: string, count: number): ChildProcess {
   return spawn(process.execPath, [HARNESS, dbPath, mode, String(count)], { cwd: ROOT });

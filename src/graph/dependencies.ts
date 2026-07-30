@@ -8,7 +8,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { IGNORED_DIRS, toRepoRelative } from "./shared.js";
+import { graphRoot, IGNORED_DIRS, toRepoRelative } from "./shared.js";
 import type { EdgeKind, LanguageScanner } from "./scanner.js";
 import { createScanners, GRAPH_EXTENSIONS } from "./scanners.js";
 import { applySpringEdges, javaFiles } from "./spring.js";
@@ -187,7 +187,7 @@ function invertImports(imports: Map<string, Set<string>>): Map<string, Set<strin
 
 /** Build the file-level import graph for a repo. */
 export function buildFileGraph(repoRoot: string): FileGraph {
-  const root = path.resolve(repoRoot);
+  const root = graphRoot(repoRoot);
   const byExtension = scannersByExtension(createScanners(root));
   const imports = new Map<string, Set<string>>();
   const importSymbols = new Map<string, Map<string, Set<string>>>();
@@ -241,7 +241,7 @@ export function updateFileGraph(
   base: FileGraph,
   modifiedFiles: Iterable<string>,
 ): FileGraph {
-  const root = path.resolve(repoRoot);
+  const root = graphRoot(repoRoot);
   const byExtension = scannersByExtension(createScanners(root));
   const imports = new Map(base.imports);
   const importSymbols = new Map(base.importSymbols);

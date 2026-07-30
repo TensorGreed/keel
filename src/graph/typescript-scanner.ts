@@ -7,6 +7,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import ts from "typescript";
+import { canonicalPath } from "../util/platform.js";
 import { IGNORED_DIRS } from "./shared.js";
 import { WHOLE_MODULE, type FileScanResult, type LanguageScanner, type ScannedImport } from "./scanner.js";
 
@@ -243,14 +244,14 @@ function resolveWorkspaceImport(resolver: Resolver, specifier: string): string |
   return null;
 }
 
-/** Realpath (workspace installs symlink into node_modules) and require in-repo, non-vendored. */
+/**
+ * Realpath (workspace installs symlink into node_modules) and require in-repo, non-vendored.
+ * Canonicalized through the same helper as the graph root — the containment check below compares
+ * the two, and a root that went through `realpath.native` while this side went through the JS
+ * `realpath` would disagree on Windows (8.3 short names, drive-letter case).
+ */
 function toInRepoSource(root: string, filePath: string): string | null {
-  let real = filePath;
-  try {
-    real = fs.realpathSync(filePath);
-  } catch {
-    // keep the unresolved path; existence was already established by the resolver
-  }
+  const real = canonicalPath(filePath);
   if (real.includes(`${path.sep}node_modules${path.sep}`)) return null;
   if (!real.startsWith(root + path.sep)) return null;
   return real;

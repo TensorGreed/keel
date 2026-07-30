@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { loadWorkspaceConfig, type WorkspaceConfig } from "../src/workspace/config.js";
 import { buildWorkspaceGraph, memberOf, qualify, workspaceBlastRadius } from "../src/workspace/graph.js";
 import { resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 // Cross-repo workspaces: one graph spanning several repos. The fixture is a six-repo workspace —
 // a lib + app pair each for TS (published via package.json name), Python and Go (resolved by reusing
@@ -26,7 +27,7 @@ describe("workspace config", () => {
     return d;
   };
   afterEach(() => {
-    while (tmps.length) fs.rmSync(tmps.pop()!, { recursive: true, force: true });
+    while (tmps.length) rmDir(tmps.pop()!);
   });
 
   it("loads keel.workspace.json, defaulting each name to its directory basename", () => {

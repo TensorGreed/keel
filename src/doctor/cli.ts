@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { FetchGitHubClient } from "../github/client.js";
 import { GitHubError } from "../github/client.js";
+import { isBatchFile, resolveOnPath } from "../util/platform.js";
 import { execFileTimed } from "../util/timeouts.js";
 import { doctorExitCode, renderDoctorTable, runDoctorChecks, type DoctorEnv } from "./doctor.js";
 
@@ -87,9 +88,18 @@ async function probeGithub(): Promise<DoctorEnv["github"]> {
   }
 }
 
+/**
+ * Is this runner usable? Resolve the name on PATH first, then run its version flag on the concrete
+ * file. Resolving matters on Windows twice over: a bare `mvn` there is really `mvn.cmd`, which an
+ * exec call can't run at all — so without resolving, an installed Maven would be reported missing.
+ * For a batch shim, presence on PATH *is* the finding; we don't shell out just to print a version.
+ */
 async function probeRunner(cmd: string, args: string[]): Promise<boolean> {
+  const resolved = resolveOnPath(cmd);
+  if (!resolved) return false;
+  if (isBatchFile(resolved)) return true;
   try {
-    await execFileTimed(cmd, args, { timeoutMs: RUNNER_PROBE_TIMEOUT_MS, label: `${cmd} ${args[0] ?? ""}` });
+    await execFileTimed(resolved, args, { timeoutMs: RUNNER_PROBE_TIMEOUT_MS, label: `${cmd} ${args[0] ?? ""}` });
     return true;
   } catch {
     return false;

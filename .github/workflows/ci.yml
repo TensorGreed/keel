@@ -12,13 +12,25 @@ concurrency:
 
 jobs:
   test:
-    name: build + test (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: build + test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # Linux carries the supported Node range; Windows runs Node 22 only (the floor in `engines`)
+      # to bound minutes — what that leg tests is the platform, not the runtime version.
       matrix:
-        node: ['22', '24']
+        include:
+          - { os: ubuntu-latest, node: '22' }
+          - { os: ubuntu-latest, node: '24' }
+          - { os: windows-latest, node: '22' }
     steps:
+      # Keel's fixtures are byte-exact inputs to the graph, the diff parser, and the report
+      # parsers, and .gitattributes pins them to LF. Turning autocrlf off as well means a Windows
+      # checkout can't reintroduce CRLF for anything the attributes file doesn't cover.
+      - name: Keep the checkout LF-only
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4

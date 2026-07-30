@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { preflight } from "../src/simulate/preflight.js";
 import { resetGraphCache } from "../src/graph/cache.js";
 import { initGraphScanners } from "../src/graph/scanners.js";
+import { IS_WINDOWS, rmDir, toolSync } from "./helpers/platform.js";
 
 // The pytest sandbox runner. The runner-unavailable path is asserted deterministically (a stub
 // interpreter that has no pytest); the executed path needs a real pytest, so it skips cleanly
@@ -13,7 +14,7 @@ import { initGraphScanners } from "../src/graph/scanners.js";
 
 function hostHasPytest(): boolean {
   try {
-    execFileSync("python3", ["-m", "pytest", "--version"], { stdio: "ignore" });
+    toolSync(IS_WINDOWS ? "python" : "python3", ["-m", "pytest", "--version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -117,9 +118,13 @@ beforeEach(() => {
   resetGraphCache();
   dir = makeRepo();
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmDir(dir));
 
-describe("pytest runner — unavailable path (always)", () => {
+// POSIX-only: the stub is a `#!/bin/sh` interpreter, and there is no portable way to fake a
+// `Scripts\python.exe` on Windows (findPythonInterpreter looks for a real executable there, as it
+// must). The behaviour under test — a venv interpreter that can't import pytest yields
+// runner-unavailable naming it — is platform-independent, so covering it on POSIX is enough.
+describe.skipIf(IS_WINDOWS)("pytest runner — unavailable path (POSIX: needs an executable stub interpreter)", () => {
   it("reports runner-unavailable, naming the interpreter, when pytest can't run", async () => {
     // A stub .venv interpreter that fails `-m pytest --version` — findPythonInterpreter prefers it,
     // so this is deterministic regardless of whether the host has pytest.
@@ -195,7 +200,7 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
       // status reflects real results: both the failure and the collection error are counted
       expect(pf.executed.failed).toBeGreaterThanOrEqual(2);
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 
@@ -212,7 +217,7 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
       expect(evidence).toContain("totally_not_installed_xyz");
       expect(pf.executed.output ?? "").not.toMatch(ANSI); // ANSI stripped from the tail
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 
@@ -248,7 +253,7 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
       expect(pf.executed.durationMs).toBeLessThan(60_000);
       expect(wallMs).toBeLessThan(60_000);
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 90_000);
 
@@ -263,7 +268,7 @@ describe.skipIf(!PYTEST)("pytest runner — executed path (host pytest)", () => 
       expect(pf.executed.status).toBe("failed");
       expect(pf.executed.failures.length).toBeGreaterThan(0);
     } finally {
-      fs.rmSync(repo, { recursive: true, force: true });
+      rmDir(repo);
     }
   }, 60_000);
 });

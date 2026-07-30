@@ -207,6 +207,35 @@ Decision records mined from PR threads/ADRs/tickets, linked to graph nodes, embe
 for retrieval. Mining runs offline with local (Ollama) or batch Haiku-class models —
 see the cost rules in `CLAUDE.md`. Humans can pin/correct records; corrections win.
 
+### Platform layer (`src/util/platform.ts`)
+
+Keel spawns processes, links directories, and keys its graph by relative path — the three things
+Windows does differently from POSIX. Rather than sprinkle `process.platform` checks through the
+sandbox, the doctor, and the graph, every difference is expressed once here and the CI matrix
+carries a `windows-latest` leg to keep it honest:
+
+- **Batch shims.** Most JVM/Node tooling installs on Windows as a `.cmd`/`.bat`, which
+  `CreateProcess` can't run and which Node refuses to `spawn` without a shell (since 20.12).
+  `spawnSpec()` resolves a bare name to a concrete file, and marks a shim `shell: true` with
+  cmd.exe quoting applied. `resolveOnPath()` does PATHEXT-aware lookup so *presence* can be
+  established without executing anything (PATH only — never the current directory).
+- **Runner invocation.** The JS runners are invoked as `process.execPath <package's bin entry>`
+  rather than through `npx` or `node_modules/.bin`: identical on every platform, and one less
+  process.
+- **Directory links.** `linkDir()` uses a junction on Windows (a `"dir"` symlink there needs
+  elevation) and `unlinkDir()` removes a link by its correct shape, so teardown can never follow
+  the sandbox's shared `node_modules` into the real tree.
+- **Path canonicalization.** `canonicalPath()` is the single form every `startsWith(root)`
+  containment check compares in. Import resolution realpaths the files it finds, so without this
+  a repo reached via a symlink (macOS `/var`) or an 8.3 short path (`%TEMP%` on a CI runner)
+  resolves every file as "outside its own root" and the graph comes back empty.
+- **Line endings.** `.gitattributes` pins the working tree to LF everywhere. The fixtures are
+  byte-exact inputs to the scanners and the diff parser, so this is a correctness constraint, not
+  a style one. Tool *output* (a JUnit report, `go test -json`) is parsed CRLF-agnostically.
+
+Where a test's stub genuinely needs a POSIX shell — a `#!/bin/sh` interpreter or build wrapper —
+the suite skips on Windows with the reason stated, rather than weakening the assertion.
+
 ## Capability layers
 
 ### `get_dependencies` / impact queries (now)

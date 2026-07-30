@@ -10,6 +10,7 @@ import {
   serializeFileGraph,
 } from "../src/graph/dependencies.js";
 import { loadGraph, resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 // --- serialization ----------------------------------------------------------
 
@@ -91,7 +92,7 @@ describe("git-keyed graph cache", () => {
     dir = initRepo();
   });
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("rebuilds on first load, then serves from disk when HEAD is unchanged", async () => {
@@ -210,7 +211,7 @@ describe("git-keyed graph cache", () => {
       expect(reportFor(load.graph, "y.ts").dependents).toEqual(["x.ts"]);
       expect(fs.existsSync(path.join(plain, ".keel", "graph.json"))).toBe(false);
     } finally {
-      fs.rmSync(plain, { recursive: true, force: true });
+      rmDir(plain);
     }
   });
 });
@@ -222,7 +223,7 @@ describe("incremental rescan over an import cycle", () => {
     resetGraphCache();
   });
   afterEach(() => {
-    if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    if (dir) rmDir(dir);
   });
 
   it("updates a cyclic graph incrementally and still excludes each file from itself", async () => {

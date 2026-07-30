@@ -9,6 +9,7 @@ import { parseAdr } from "../src/adr/parse.js";
 import { ingestAdrs, linkAdr } from "../src/adr/ingest.js";
 import { answerWhy, type WhyResult } from "../src/retrieval/why.js";
 import { addHumanDecision } from "../src/mining/decision-cli.js";
+import { rmDir } from "./helpers/platform.js";
 
 // --- fixtures ---------------------------------------------------------------
 
@@ -51,7 +52,7 @@ function writeAdr(root: string, rel: string, content: string): void {
   fs.writeFileSync(path.join(root, rel), content);
 }
 afterEach(() => {
-  while (repos.length) fs.rmSync(repos.pop()!, { recursive: true, force: true });
+  while (repos.length) rmDir(repos.pop()!);
 });
 
 async function adrEvents(store: SqliteEventStore): Promise<KeelEvent[]> {

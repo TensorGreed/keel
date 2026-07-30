@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { looseSatisfies, versionSkewWarnings } from "../src/workspace/skew.js";
 import type { WorkspaceMember } from "../src/workspace/config.js";
+import { rmDir } from "./helpers/platform.js";
 
 // Version skew: the workspace graph describes the CHECKOUTS, so keel warns when a member's checked-out
 // version doesn't satisfy what a sibling declares as its dependency constraint (TS/JS, cheap check).
@@ -38,7 +39,7 @@ describe("versionSkewWarnings", () => {
     return d;
   }
   afterEach(() => {
-    while (tmps.length) fs.rmSync(tmps.pop()!, { recursive: true, force: true });
+    while (tmps.length) rmDir(tmps.pop()!);
   });
 
   it("warns when a sibling's checkout doesn't satisfy the declared constraint", () => {

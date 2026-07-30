@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { preflight } from "../src/simulate/preflight.js";
 import { resetGraphCache } from "../src/graph/cache.js";
 import { initGraphScanners } from "../src/graph/scanners.js";
+import { rmDir, toolSync, writeFailingShim } from "./helpers/platform.js";
 
 // The Go sandbox runner. The runner-unavailable path is asserted deterministically (a `go` shim on
 // PATH that exits non-zero); the executed path needs a real go toolchain, so it skips cleanly when
@@ -13,7 +14,7 @@ import { initGraphScanners } from "../src/graph/scanners.js";
 
 function hostHasGo(): boolean {
   try {
-    execFileSync("go", ["version"], { stdio: "ignore" });
+    toolSync("go", ["version"], { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -99,15 +100,14 @@ beforeEach(() => {
   resetGraphCache();
   dir = makeRepo();
 });
-afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+afterEach(() => rmDir(dir));
 
 describe("go runner — unavailable path (always)", () => {
   it("reports runner-unavailable when the go toolchain can't run, and still selects the tests", async () => {
     // Shadow `go` with a shim that exits non-zero, so `go version` fails deterministically
     // regardless of whether the host has a real go. git still resolves further down PATH.
     const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "keel-goshim-"));
-    fs.writeFileSync(path.join(shimDir, "go"), "#!/bin/sh\nexit 1\n");
-    fs.chmodSync(path.join(shimDir, "go"), 0o755);
+    writeFailingShim(shimDir, "go");
     const oldPath = process.env["PATH"];
     process.env["PATH"] = shimDir + path.delimiter + (oldPath ?? "");
     try {
@@ -119,7 +119,7 @@ describe("go runner — unavailable path (always)", () => {
       expect(pf.testsSelected).toEqual(["calc/calc_test.go"]); // selection still works
     } finally {
       process.env["PATH"] = oldPath;
-      fs.rmSync(shimDir, { recursive: true, force: true });
+      rmDir(shimDir);
     }
   }, 30_000);
 });

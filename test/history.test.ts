@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { historyFor } from "../src/git/history.js";
+import { rmDir } from "./helpers/platform.js";
 
 // A hermetic temp repo with known history. Earlier this ran against keel's own checkout, which
 // is fragile in CI: actions/checkout does a shallow clone (so `git log -- README.md` can be
@@ -33,7 +34,7 @@ beforeAll(() => {
   fs.appendFileSync(path.join(repoRoot, "README.md"), "more\n");
   git(repoRoot, ["commit", "-qam", "expand readme"]);
 });
-afterAll(() => fs.rmSync(repoRoot, { recursive: true, force: true }));
+afterAll(() => rmDir(repoRoot));
 
 describe("git history", () => {
   it("returns commits for a tracked path, newest first", async () => {

@@ -13,6 +13,7 @@ import {
 } from "../src/simulate/select-tests.js";
 import { getImpact } from "../src/simulate/impact.js";
 import { loadGraph, loadHeadGraph, resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 function write(dir: string, rel: string, contents: string): void {
   const target = path.join(dir, rel);
@@ -57,7 +58,7 @@ describe("test selection (pure graph)", () => {
     graph = buildFileGraph(dir);
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("maps a test to the sources it covers", () => {
@@ -140,7 +141,7 @@ describe("test selection from a diff", () => {
     git(dir, ["commit", "-qm", "init"]);
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
   beforeEach(() => {
     resetGraphCache();

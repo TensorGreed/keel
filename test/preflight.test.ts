@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { preflight, type PreflightResult } from "../src/simulate/preflight.js";
 import { resetGraphCache } from "../src/graph/cache.js";
+import { linkNodeModules, rmDir } from "./helpers/platform.js";
 
 function git(dir: string, args: string[]): void {
   execFileSync("git", args, {
@@ -80,7 +81,7 @@ describe("preflight orchestration", () => {
     dir = initNodeRepo();
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
   beforeEach(() => {
     resetGraphCache();
@@ -179,10 +180,10 @@ describe("preflight with vitest (structured failures)", () => {
     git(dir, ["add", "-A"]);
     git(dir, ["commit", "-qm", "init"]);
     // Share keel's installed vitest without a per-fixture npm install.
-    fs.symlinkSync(KEEL_NODE_MODULES, path.join(dir, "node_modules"), "dir");
+    linkNodeModules(KEEL_NODE_MODULES, dir);
   });
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
   beforeEach(() => {
     resetGraphCache();

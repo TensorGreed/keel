@@ -8,6 +8,7 @@ import type { VerdictFacts } from "../src/trust/facts.js";
 import { DEFAULT_POLICY, type Policy } from "../src/trust/policy.js";
 import { computeVerdict, evaluatePolicy, type Verdict } from "../src/trust/verdict.js";
 import { resetGraphCache } from "../src/graph/cache.js";
+import { rmDir } from "./helpers/platform.js";
 
 // --- rule matrix (pure, fabricated facts) -----------------------------------
 
@@ -240,7 +241,7 @@ describe("computeVerdict end-to-end", () => {
   });
   afterAll(() => {
     store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("passes a benign change under the default policy", async () => {
@@ -312,7 +313,7 @@ describe("computeVerdict forbiddenImports end-to-end", () => {
   });
   afterAll(() => {
     store.close();
-    fs.rmSync(dir, { recursive: true, force: true });
+    rmDir(dir);
   });
 
   it("blocks when a changed file introduces a forbidden edge, naming the edge", async () => {
