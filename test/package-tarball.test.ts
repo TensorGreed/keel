@@ -32,10 +32,16 @@ describe("npm package tarball", () => {
       "package.json",
       "README.md",
       "LICENSE",
+      "CHANGELOG.md", // what a consumer reads to decide whether to upgrade
       "dist/index.js",
       "dist/events/schema.sql", // copied next to the compiled store; the DB won't open without it
-      "dist/graph/wasm/tree-sitter-python.wasm", // the Python grammar — ships so installs stay zero-build
+      // Every tree-sitter grammar, not just Python's: each ships so installs stay zero-build, and a
+      // missing one breaks that language's scanner at runtime with nothing at install time to hint why.
+      "dist/graph/wasm/tree-sitter-python.wasm",
+      "dist/graph/wasm/tree-sitter-go.wasm",
+      "dist/graph/wasm/tree-sitter-java.wasm",
       "recipes/claude-code-hook.md",
+      "recipes/github-check.md",
       "docs/concept.md",
     ]) {
       expect(files, `expected ${required} in the tarball`).toContain(required);
