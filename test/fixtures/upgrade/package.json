@@ -1,0 +1,10 @@
+{
+  "name": "upgrade-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "greeter": "file:vendor/greeter-1.0.0",
+    "sidecar": "file:vendor/sidecar-1.0.0"
+  }
+}

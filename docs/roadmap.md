@@ -132,6 +132,39 @@ Goal: the same substrate over more languages, more sources, and more than one re
       resolver. Blast radius crosses repos; queried via `keel workspace [impact|deps]`. Execution,
       decisions, and MCP tools stay single-repo this pass (Java cross-repo deferred)
 
+## Phase 6 — `keel upgrade`: dependency upgrades with proof
+
+Goal: turn "bump this dependency" from a leap of faith into a scoped, executed, and eventually
+repaired change. This is the substrate's first *application*: the graph knows who imports the
+package, the simulator proves what the bump breaks, memory recalls why the pin exists, and the
+trust layer decides whether it can be automated. **Demo:** point keel at a real repo, name a
+dependency, and get back the exact call sites that break — executed, not predicted.
+
+Sequenced so each phase is useful alone, and so nothing writes code until keel can prove what's
+broken.
+
+- [x] **Phase 0 — scope + break discovery + report (REPORT-ONLY).** `keel upgrade <pkg>@<version>`
+      and the `upgrade_scope` MCP tool. Scope: every file importing the package (from the graph's
+      retained external specifiers), the union blast radius, the covering tests, and the share of
+      the repo reached. Discovery: in a sandbox worktree, apply *only* the version bump and run the
+      covering tests, plus the install-time signals (peer-dep conflicts, engine mismatches) that are
+      breaks in their own right. Report: surface, executed failures with traces and graph paths back
+      to the import sites, known-flaky failures discounted **and labelled as such**, uncovered
+      surface, and a verdict for the bare bump. Attempts no repairs, and says so.
+- [ ] **Phase 1 — agent-driven repair loop.** Hand the caller's agent one failure at a time with
+      everything needed to fix it — the failing test, the trace, the import site, the package's own
+      changelog/diff for the symbols in play — then re-run the sim on the proposed patch and iterate
+      until green or budget-exhausted. Keel scopes, executes, and judges; the agent writes the code
+      (principle 1: no flagship-model calls server-side).
+- [ ] **Phase 2 — memory-informed repair.** Consult the decision index before proposing anything: a
+      pin with a recorded reason ("held back at 4.x, see #812 — the 5.x codec breaks our uploads") is
+      a decision the upgrade may be contradicting, surfaced with its receipt. Past repairs of the
+      same package become context for the next one.
+- [ ] **Phase 3 — batch + policy.** Many packages in one pass, ordered by blast radius and risk;
+      `keel.policy.json` gains upgrade rules (what may auto-merge on green, what always needs a
+      human, which packages are pinned and why). The output is a set of PRs, each carrying its own
+      executed proof.
+
 ## Later
 
 Team deployment, policy sharing, incident + Jira connectors, service-level graphs.

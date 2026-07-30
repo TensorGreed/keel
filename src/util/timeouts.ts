@@ -91,6 +91,8 @@ export interface ExecFileTimedOptions {
   label?: string;
   /** if set, written to the child's stdin and closed (e.g. piping a diff to `git apply`) */
   input?: string;
+  /** run through a shell — required on Windows for a .cmd/.bat shim (see util/platform.spawnSpec) */
+  shell?: boolean;
 }
 
 /**
@@ -126,7 +128,7 @@ function execFileTimedRaw(
     const child = execFile(
       command,
       args,
-      { cwd: opts.cwd, maxBuffer: opts.maxBuffer, timeout: timeoutMs, killSignal: "SIGTERM" },
+      { cwd: opts.cwd, maxBuffer: opts.maxBuffer, timeout: timeoutMs, killSignal: "SIGTERM", ...(opts.shell ? { shell: true } : {}) },
       (err, stdout, stderr) => {
         if (err) {
           (err as NodeJS.ErrnoException & { stdout?: string; stderr?: string }).stdout = stdout;

@@ -53,7 +53,7 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 ```
 src/
   index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision,
-                    verdict, report, prompt-context, doctor
+                    verdict, report, prompt-context, doctor, upgrade
   serve.ts          Starts the MCP server over stdio; ingests commits first
   doctor/           `keel doctor`: doctor.ts (pure checks over a gathered DoctorEnv → ok/warn/fail
                     with one named fix each), cli.ts (defensive real-env probes; table + --json,
@@ -83,9 +83,18 @@ src/
   workspace/        Cross-repo graph: config.ts (keel.workspace.json), graph.ts (merge member
                     graphs, namespace as name::path, add cross-repo edges), cli.ts (`keel
                     workspace`). Graph/impact layer only — execution/decisions/tools stay single-repo
+  upgrade/          `keel upgrade` (Phase 0, REPORT-ONLY): scope.ts (import sites from the graph's
+                    retained externalImports -> union blast radius + covering tests + uncovered
+                    surface), install.ts (rewrite package.json in the worktree, `npm install` — the
+                    ONE place install runs — and read peer/engine/failure signals out of npm's own
+                    output, warnings included), upgrade.ts (scope -> sandbox prepare-hook -> flaky
+                    discounting -> next steps -> verdict via evaluatePolicy), report.ts (table),
+                    cli.ts. Attempts no repairs and says so; also the `upgrade_scope` MCP tool
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
-                    sandbox.ts (apply diff in a temp worktree, run the tests),
+                    sandbox.ts (apply diff in a temp worktree, run the tests; `prepare` hook +
+                    linkNodeModules:false are the seam `keel upgrade` installs through, and node:test
+                    now reports via its junit reporter so zero-dep repos get structured failures),
                     preflight.ts (impact -> select -> sandbox, budgeted)
   github/           `keel ingest` (GitHub half): backfill PRs + review threads into the event log
                     (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps); cli.ts also

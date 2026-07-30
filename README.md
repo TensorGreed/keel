@@ -73,6 +73,7 @@ MCP tools an agent calls (zod-validated input, structured JSON out, errors retur
 | `flaky_tests` | tests CI proved non-deterministic (passed *and* failed on one commit) | CI reports |
 | `get_history` | git history for a path — the raw material for "why" | git |
 | `workspace_impact` | cross-repo blast radius (only when a `keel.workspace.json` is present) | workspace graph |
+| `upgrade_scope` | who imports a dependency, and what its bump actually breaks | graph + executed sim |
 
 CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>`):
 
@@ -88,6 +89,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `prompt-context` | Claude Code UserPromptSubmit hook: inject decisions relevant to the prompt |
 | `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
+| `upgrade` | scope a dependency upgrade and prove what it breaks — executed, report-only; `--scope-only`, `--json` |
 | `doctor` | check the environment is healthy (Node/git, db, a timed graph build, runners, tokens, registration); `--json`, `--no-graph`, exit 1 on red |
 
 ## Quick start
@@ -104,6 +106,27 @@ src/config.ts?"* — it calls Keel and answers from the graph. `init` wires the 
 
 Optional, progressive enrichment (never prerequisites): `keel ingest` + `keel mine` populate `why`;
 a `keel.policy.json` tightens `verdict`; a `keel.workspace.json` turns on cross-repo analysis.
+
+## Upgrading a dependency, with proof
+
+```bash
+keel upgrade lodash@4.17.21          # scope, install in a sandbox, run the covering tests
+keel upgrade lodash@latest --json    # same, structured
+keel upgrade lodash --scope-only     # graph answer only: no install, no network, instant
+```
+
+Keel finds every file importing the package (the graph already retains the import specifiers that
+resolve outside the repo), computes the blast radius and the covering tests, then — in a throwaway
+git worktree, never your checkout — applies **only** the version bump, installs, and runs exactly
+those tests. You get the failures that actually happened, each with a graph path back to the import
+site that caused it; peer-dependency conflicts and engine mismatches, which break a build before a
+test can run; the part of the surface no test covers, so a green run isn't mistaken for proof; and a
+verdict for the bare bump under your `keel.policy.json`.
+
+Failures your CI has proven flaky are discounted **and listed as discounted**, so you can disagree.
+
+This phase is **report only** — it attempts no repairs, and says so in its output. Every failure
+comes back as a work item for you or your agent. Agent-driven repair is Phase 1 (docs/roadmap.md).
 
 ## Mining decisions — model providers
 

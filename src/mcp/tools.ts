@@ -182,6 +182,44 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
   );
 
   server.tool(
+    "upgrade_scope",
+    "Scope a dependency upgrade and PROVE what it breaks. Finds every file importing the package " +
+      "(from the graph's retained external import specifiers), computes the union blast radius and " +
+      "the covering tests, then — in a throwaway git worktree, never the user's checkout — applies " +
+      "ONLY the version bump, runs `npm install`, and executes those tests. Output: { scope " +
+      "{ importSites, specifiers, surface, shareOfRepo, testsSelected, uncoveredSurface }, install " +
+      "{ ok, signals[{ kind, message, evidence }] }, executed { status, failures[{ test, file, " +
+      "message, trace, graphPath, importSite }], discountedFlaky[] }, nextSteps, reportOnly, " +
+      "verdict, budget }. Install-time problems (peer-dependency conflicts, engine mismatches) are " +
+      "reported as breaks in their own right. Failures CI has proven flaky are separated into " +
+      "discountedFlaky rather than hidden. REPORT ONLY: keel attempts no repairs — every failure " +
+      "is a work item for YOU to fix. Pass scopeOnly for the graph answer alone (no install, no " +
+      "network, fast). Errors come back as data, never thrown.",
+    {
+      package: z.string().describe("Package name, e.g. `lodash` or `@scope/pkg`"),
+      version: z.string().optional().describe("Target version, range, or dist-tag (default `latest`)"),
+      scopeOnly: z.boolean().optional().describe("Skip the install and tests; report the graph surface only"),
+      maxTests: z.number().int().min(0).optional().describe("Max covering tests to run (default 50 / KEEL_MAX_TESTS)"),
+      maxSeconds: z.number().int().min(1).optional().describe("Wall-time cap for install + tests (default 300 / KEEL_MAX_SECONDS)"),
+    },
+    async ({ package: pkg, version, scopeOnly, maxTests, maxSeconds }) => {
+      try {
+        const { runUpgradeAnalysis } = await import("../upgrade/upgrade.js");
+        return json(
+          await runUpgradeAnalysis(repoRoot, `${pkg}@${version ?? "latest"}`, {
+            ...(scopeOnly !== undefined ? { scopeOnly } : {}),
+            ...(maxTests !== undefined ? { maxTests } : {}),
+            ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+            ...(store ? { store } : {}),
+          }),
+        );
+      } catch (err) {
+        return json({ error: `upgrade_scope failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
     "get_history",
     "Recent git history for a file or directory: who changed it, when, and why " +
       "(commit subjects and bodies). The raw material for 'why is this like this?'.",

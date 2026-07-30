@@ -9,6 +9,39 @@ Keel is pre-1.0: the MCP tool surface and the `keel.policy.json` / `keel.workspa
 schemas may still change between minor versions. Breaking changes are called out under
 **Changed** with a migration note.
 
+## [Unreleased]
+
+### Added
+
+- **`keel upgrade` — dependency upgrades with proof (Phase 0, report only).**
+  `keel upgrade <pkg>@<version|latest>` and the `upgrade_scope` MCP tool, over one core in
+  `src/upgrade/`. It **scopes** the upgrade from the graph — every file importing the package (the
+  retained external import specifiers), the union blast radius, the covering tests, the share of the
+  repo reached, and the part of the surface no test covers; **discovers breaks** by applying *only*
+  the version bump in a throwaway git worktree, running `npm install` there, and executing exactly
+  those tests; and **reports** one structured result as a table, `--json`, or MCP. Failures carry a
+  graph path back to the import site that caused them. Peer-dependency conflicts and engine
+  mismatches are breaks in their own right — npm reports both as *warnings* on an install that
+  exits zero, so the install log is read regardless of exit code. Failures CI has proven flaky are
+  discounted **and listed as discounted**, with the reason, so the discount is auditable.
+  Budgets (`--max-tests`, `--max-seconds`) are honoured and always reported, and the run ends with a
+  verdict for the bare bump under `keel.policy.json`. It attempts **no repairs** and says so in its
+  output; every failure comes back as a work item. `--scope-only` gives the graph answer with no
+  install and no network — and because it proves nothing, it withholds the verdict and exits 2
+  rather than 0, so it can never be mistaken for a passing gate. Exit codes otherwise match
+  `keel verdict`: 0 pass, 2 warn, 1 block or error.
+  Roadmap Phase 6 (docs/roadmap.md) sequences the repair phases that build on this.
+- **Structured failures from `node --test`.** The JS sandbox runner now drives Node's built-in
+  `junit` reporter alongside `spec`, so a zero-dependency repo gets per-test failures with file,
+  message and stack — parsed by the same `keel ci` parser — instead of just a non-zero exit.
+
+### Changed
+
+- `runSandbox` gains a `prepare` hook (run after the worktree exists, before the runner is chosen,
+  sharing the wall-clock budget) and a `linkNodeModules` flag. `keel upgrade` needs both: its change
+  isn't expressible as a diff, and sharing the host's `node_modules` would test the version it is
+  trying to replace. Existing callers are unaffected — the defaults are the previous behaviour.
+
 ## [0.1.1] — 2026-07-30
 
 The "widen and harden" release: three more languages, higher-order tools that compose the
@@ -254,5 +287,6 @@ TypeScript/JavaScript repos.
 - **CI and release pipelines**: build + test on Node 22 and 24; publish to npm on a `v*` tag
   via trusted publishing (OIDC, with provenance).
 
+[Unreleased]: https://github.com/TensorGreed/keel/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/TensorGreed/keel/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TensorGreed/keel/releases/tag/v0.1.0

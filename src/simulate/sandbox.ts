@@ -75,6 +75,29 @@ export interface SandboxOptions {
   testFiles: string[];
   timeoutMs?: number;
   maxTests?: number;
+  /**
+   * Share the main repo's node_modules by linking it into the worktree (default true). `keel
+   * upgrade` turns this OFF: the whole point of that run is a DIFFERENT dependency tree, and a link
+   * to the host's node_modules would silently test the version already installed.
+   */
+  linkNodeModules?: boolean;
+  /**
+   * Run after the worktree exists and the change is applied, before the runner is chosen — the seam
+   * for a change that isn't expressible as a diff. `keel upgrade` uses it to rewrite package.json
+   * and install; returning an error aborts the run with that status instead of running tests.
+   *
+   * It shares the run's wall-clock budget: whatever it consumes is deducted from the time left for
+   * the tests, and the remaining budget is passed back in so it can bound its own subprocesses.
+   */
+  prepare?: (worktree: string, budgetMs: number) => Promise<PrepareResult>;
+}
+
+export interface PrepareResult {
+  /** set to abort before running tests: the run ends with this status and error */
+  error?: string;
+  status?: RunStatus;
+  /** captured output to fold into the result (an install log, say) */
+  output?: string;
 }
 
 interface ProcResult {
@@ -287,6 +310,39 @@ function pytestResults(
   return { passed, failed, failures, total: report.tests.length };
 }
 
+/** The junit report path that pairs with a runner's JSON report path (same dir, .xml). */
+function junitPathFor(jsonFile: string): string {
+  return jsonFile.replace(/\.json$/, ".junit.xml");
+}
+
+/**
+ * Normalize Node's built-in junit reporter into sandbox counts + failures. Unlike pytest's report
+ * this one carries an absolute `file` per case, so attribution needs no reconstruction — just the
+ * repo-relative conversion every graph key uses.
+ */
+export function nodeTestResults(xml: string, worktree: string): { passed: number; failed: number; failures: TestFailure[] } {
+  const report = parseJUnit(xml);
+  let passed = 0;
+  const failures: TestFailure[] = [];
+  for (const t of report.tests) {
+    if (t.status === "passed") {
+      passed++;
+      continue;
+    }
+    if (t.status === "skipped") continue;
+    const file = t.file ? toRepoRel(worktree, t.file) : undefined;
+    const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
+    const trace = t.details ? capLines(stripAnsi(t.details).trim(), MAX_TRACE_LINES) : undefined;
+    failures.push({
+      name: t.name || "(unnamed test)",
+      ...(file ? { file } : {}),
+      message,
+      ...(trace && trace !== message ? { trace } : {}),
+    });
+  }
+  return { passed, failed: failures.length, failures };
+}
+
 /** Parse Jest-schema JSON (vitest emits the same) into normalized failures. */
 export function parseJestJson(
   text: string,
@@ -416,7 +472,23 @@ async function applyChange(
  * fallback for the odd layout where the bin field doesn't resolve.
  */
 function runnerCommand(runner: "vitest" | "jest" | "node", worktree: string, testFiles: string[], jsonFile: string): [string, string[]] {
-  if (runner === "node") return [process.execPath, ["--test", ...testFiles]];
+  if (runner === "node") {
+    // Two reporters: `spec` to stdout so the output tail stays human-readable, and `junit` to a file
+    // so failures come back STRUCTURED — name, file, message and stack — instead of just a non-zero
+    // exit. Node's built-in junit reporter is available from the version keel already requires, and
+    // the report goes through the same parser `keel ci` uses.
+    return [
+      process.execPath,
+      [
+        "--test",
+        "--test-reporter=spec",
+        "--test-reporter-destination=stdout",
+        "--test-reporter=junit",
+        `--test-reporter-destination=${junitPathFor(jsonFile)}`,
+        ...testFiles,
+      ],
+    ];
+  }
   const runnerArgs =
     runner === "vitest"
       ? ["run", ...testFiles, "--reporter=json", `--outputFile=${jsonFile}`]
@@ -1011,6 +1083,18 @@ function firstErrorLine(output: string): string {
   return line || "see output";
 }
 
+/** Concatenate a prepare log ahead of a runner's output, dropping either if empty. */
+function joinOutput(prepared: string | undefined, runner: string): string {
+  return [prepared, runner].filter((s) => s && s.trim() !== "").join("\n");
+}
+
+/** Prepend the prepare log to a language runner's result, so an install's output isn't lost. */
+function withPrepareOutput(result: Omit<SandboxResult, "durationMs">, prepared: string | undefined): Omit<SandboxResult, "durationMs"> {
+  if (!prepared || prepared.trim() === "") return result;
+  const combined = tail(joinOutput(prepared, result.output ?? ""));
+  return { ...result, ...(combined ? { output: combined } : {}) };
+}
+
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? runnerTimeoutMs();
@@ -1055,32 +1139,56 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     if (!added) return done({ status: "error", runner: null, ranTests, error: "could not create git worktree" });
 
     // Share deps without a reinstall: link node_modules if the main repo has it. A failure isn't
-    // fatal — tests may still run for a zero-dep (node:test) repo.
+    // fatal — tests may still run for a zero-dep (node:test) repo. Skipped when the caller is about
+    // to install its own tree (see linkNodeModules), where the link would test the wrong versions.
     const mainModules = path.join(repoRoot, "node_modules");
-    if (fs.existsSync(mainModules) && !fs.existsSync(linkedModules)) linkDir(mainModules, linkedModules);
+    if ((options.linkNodeModules ?? true) && fs.existsSync(mainModules) && !fs.existsSync(linkedModules)) {
+      linkDir(mainModules, linkedModules);
+    }
 
     const applyError = await applyChange(repoRoot, worktree, options.diff);
     if (applyError) return done({ status: "apply-failed", runner: null, ranTests, error: applyError, ...(capped ? { capped } : {}) });
+
+    // The prepare seam: a change that isn't a diff (a dependency install, say). It spends from the
+    // same wall-clock budget, so what it takes is not available to the tests.
+    let prepareOutput: string | undefined;
+    let budgetMs = timeoutMs;
+    if (options.prepare) {
+      const startedPrepare = Date.now();
+      const prepared = await options.prepare(worktree, budgetMs);
+      budgetMs = Math.max(0, budgetMs - (Date.now() - startedPrepare));
+      prepareOutput = prepared.output;
+      if (prepared.error !== undefined) {
+        return done({
+          status: prepared.status ?? "error",
+          runner: null,
+          ranTests,
+          error: prepared.error,
+          ...(prepared.output ? { output: tail(prepared.output) } : {}),
+          ...(capped ? { capped } : {}),
+        });
+      }
+    }
 
     // A change's covering tests are one language (no cross-language edges), so a Python selection
     // runs under pytest, a Go selection under `go test`, a Java selection under mvn/gradle; anything
     // else under the JS runners.
     if (ranTests.every(isPythonTest)) {
-      return done(await runPytest(repoRoot, worktree, parent, ranTests, timeoutMs, capped));
+      return done(withPrepareOutput(await runPytest(repoRoot, worktree, parent, ranTests, budgetMs, capped), prepareOutput));
     }
     if (ranTests.every(isGoTest)) {
-      return done(await runGoTest(worktree, ranTests, timeoutMs, capped));
+      return done(withPrepareOutput(await runGoTest(worktree, ranTests, budgetMs, capped), prepareOutput));
     }
     if (ranTests.every(isJavaTest)) {
-      return done(await runJavaTest(worktree, ranTests, timeoutMs, capped));
+      return done(withPrepareOutput(await runJavaTest(worktree, ranTests, budgetMs, capped), prepareOutput));
     }
 
     const runner = detectRunner(worktree);
     const jsonFile = path.join(parent, "report.json");
     const [command, args] = runnerCommand(runner, worktree, ranTests, jsonFile);
-    const proc = await runProcess(command, args, { cwd: worktree, timeoutMs });
+    const proc = await runProcess(command, args, { cwd: worktree, timeoutMs: budgetMs });
 
-    const combined = tail(`${proc.stdout}\n${proc.stderr}`);
+    const combined = tail(joinOutput(prepareOutput, `${proc.stdout}\n${proc.stderr}`));
     if (proc.timedOut) {
       return done({ status: "timed-out", runner, ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...(capped ? { capped } : {}) });
     }
@@ -1089,12 +1197,13 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     }
 
     let structured: { passed: number; failed: number; failures: TestFailure[] } | null = null;
-    if (runner !== "node") {
-      try {
-        structured = parseJestJson(fs.readFileSync(jsonFile, "utf8"), worktree);
-      } catch {
-        structured = null;
-      }
+    try {
+      structured =
+        runner === "node"
+          ? nodeTestResults(fs.readFileSync(junitPathFor(jsonFile), "utf8"), worktree)
+          : parseJestJson(fs.readFileSync(jsonFile, "utf8"), worktree);
+    } catch {
+      structured = null; // no report written (a crash before any test ran) — the output tail stands in
     }
 
     const status: RunStatus = proc.code === 0 ? "passed" : "failed";

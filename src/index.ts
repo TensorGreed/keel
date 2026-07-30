@@ -11,6 +11,7 @@
  *   keel verdict   pass/warn/block a change vs keel.policy.json — see trust/verdict-cli.ts
  *   keel report    repo-wide policy reports (--arch)          — see trust/report-cli.ts
  *   keel workspace cross-repo graph over keel.workspace.json  — see workspace/cli.ts
+ *   keel upgrade   scope a dependency upgrade + prove what it breaks — see upgrade/cli.ts
  *
  * Subcommand modules are imported lazily so `keel init` doesn't spin up the MCP SDK,
  * SQLite, or commit ingestion.
@@ -30,6 +31,7 @@ Usage:
   keel prompt-context  surface decisions relevant to a prompt (Claude Code UserPromptSubmit hook)
   keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel workspace one dependency graph across repos (keel.workspace.json)
+  keel upgrade   scope a dependency upgrade and prove what it breaks (report only)
   keel doctor    check the environment is healthy (versions, db, runners, tokens)
   keel --help    show this help
   keel --version print the version
@@ -99,6 +101,11 @@ switch (command) {
   case "workspace": {
     const { runWorkspace } = await import("./workspace/cli.js");
     process.exit(await runWorkspace(rest));
+    break;
+  }
+  case "upgrade": {
+    const { runUpgrade } = await import("./upgrade/cli.js");
+    process.exit(await runUpgrade(rest));
     break;
   }
   case "-h":

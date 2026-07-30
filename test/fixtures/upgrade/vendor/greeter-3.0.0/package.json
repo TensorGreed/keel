@@ -1,0 +1,3 @@
+{ "name": "greeter", "version": "3.0.0", "main": "index.js",
+  "peerDependencies": { "sidecar": "^2.0.0" },
+  "engines": { "node": ">=99.0.0" } }
