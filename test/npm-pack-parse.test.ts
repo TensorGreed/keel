@@ -14,8 +14,14 @@
  *   - `npm-warn-prefixed.txt` — the same document behind the `always-auth` config warnings the CI
  *                               runner emitted, i.e. the stream is not pure JSON.
  *   - `npm-object-shape.txt`  — the entry object on its own, no array wrapper. This is the one that
- *                               actually bit: `JSON.parse` succeeds, `parsed[0]` is `undefined`,
- *                               and the failure surfaces far from the assumption that caused it.
+ *                               first bit: `JSON.parse` succeeds, `parsed[0]` is `undefined`, and
+ *                               the failure surfaces far from the assumption that caused it.
+ *   - `npm-name-keyed-object.json`
+ *                             — the entry nested under its own package name. Captured from a later
+ *                               CI failure, and clean rather than warning-prefixed because the guard
+ *                               passes `--loglevel=error` by then. A third envelope for the same
+ *                               document is why the parser searches for the file list instead of
+ *                               addressing it by a fixed path.
  */
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
@@ -33,6 +39,7 @@ describe("parseNpmPackOutput — recorded npm shapes", () => {
     ["npm 11 array form, clean stdout", "npm-11-array.json"],
     ["array form behind npm config warnings", "npm-warn-prefixed.txt"],
     ["bare object form behind npm config warnings", "npm-object-shape.txt"],
+    ["entry nested under its own package name", "npm-name-keyed-object.json"],
   ] as const) {
     it(`reads ${label}`, () => {
       const files = parseNpmPackOutput(recorded(fixture));
@@ -43,11 +50,14 @@ describe("parseNpmPackOutput — recorded npm shapes", () => {
   }
 
   it("reads every shape to the same file list — the envelope must not change the answer", () => {
-    const [array, warned, object] = ["npm-11-array.json", "npm-warn-prefixed.txt", "npm-object-shape.txt"].map((f) =>
-      parseNpmPackOutput(recorded(f)),
-    );
-    expect(warned).toEqual(array);
-    expect(object).toEqual(array);
+    const [array, ...others] = [
+      "npm-11-array.json",
+      "npm-warn-prefixed.txt",
+      "npm-object-shape.txt",
+      "npm-name-keyed-object.json",
+    ].map((f) => parseNpmPackOutput(recorded(f)));
+    expect(array).not.toBeNull();
+    for (const other of others) expect(other).toEqual(array);
   });
 });
 
@@ -93,5 +103,16 @@ describe("parseNpmPackOutput — variations it should absorb", () => {
 
   it("takes the first entry that has a files list when several are present", () => {
     expect(parseNpmPackOutput('[{"id":"a"},{"files":[{"path":"package.json"}]}]')).toEqual(["package.json"]);
+  });
+
+  it("finds an entry keyed by package name, and prefers a top-level files list over a nested one", () => {
+    expect(parseNpmPackOutput('{"@scope/pkg":{"files":[{"path":"package.json"}]}}')).toEqual(["package.json"]);
+    // A document with its own files list is answered from THAT, not from something nested below it.
+    const both = '{"files":[{"path":"top.js"}],"@scope/pkg":{"files":[{"path":"nested.js"}]}}';
+    expect(parseNpmPackOutput(both)).toEqual(["top.js"]);
+  });
+
+  it("only descends one level — a files list buried deeper is not a shape we claim to know", () => {
+    expect(parseNpmPackOutput('{"a":{"b":{"files":[{"path":"package.json"}]}}}')).toBeNull();
   });
 });

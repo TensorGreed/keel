@@ -7,9 +7,11 @@
  * and the guard died taking every test in its file with it. npm's `--json` contract is not as
  * stable as it looks:
  *
- *   - **The envelope varies.** Some versions emit an array of one entry, others the entry object
- *     on its own. Indexing `[0]` silently yields `undefined` on the second, which then explodes
- *     somewhere less informative than where the assumption was made.
+ *   - **The envelope varies**, in at least three ways seen in the wild: an array of one entry, the
+ *     entry object on its own, and the entry nested under its own package name
+ *     (`{ "@scope/pkg": { files: [...] } }`). Indexing `[0]` silently yields `undefined` on the
+ *     latter two, which then explodes somewhere less informative than where the assumption was made.
+ *     So the file list is *searched for* rather than addressed by a fixed path.
  *   - **The stream is not always pure JSON.** A config warning (`npm warn Unknown project config
  *     "always-auth"`) can land ahead of the document depending on version and log routing, so the
  *     text must be found inside the output rather than assumed to be all of it. Callers also pass
@@ -39,6 +41,10 @@ export function parseNpmPackOutput(raw: string): string[] | null {
       const files = filePathsOf(candidate);
       if (files) return files;
     }
+    // Last: the entry hidden one level down, under its own package name. Tried after the direct
+    // shapes so those keep their exact behaviour, and only for an object without its own `files`.
+    const keyed = filePathsOfKeyedEntry(parsed);
+    if (keyed) return keyed;
   }
   return null;
 }
@@ -51,6 +57,21 @@ export function parseNpmPackOutput(raw: string): string[] | null {
  */
 function jsonStartCandidates(raw: string): number[] {
   return [raw.indexOf("["), raw.indexOf("{")].filter((i) => i >= 0).sort((a, b) => a - b);
+}
+
+/**
+ * The `files` list of an entry nested one level under its own package name —
+ * `{ "@scope/pkg": { files: [...] } }`. Takes the first value that carries a readable list, the
+ * same "first entry with files" rule the array form uses; a multi-package pack would otherwise have
+ * no defined answer. One level only: this is a known envelope, not an invitation to go hunting.
+ */
+function filePathsOfKeyedEntry(value: unknown): string[] | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  for (const nested of Object.values(value)) {
+    const files = filePathsOf(nested);
+    if (files) return files;
+  }
+  return null;
 }
 
 /** The `files` list of one pack entry as plain paths, or null if this isn't a readable entry. */
