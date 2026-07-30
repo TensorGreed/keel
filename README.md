@@ -74,6 +74,7 @@ MCP tools an agent calls (zod-validated input, structured JSON out, errors retur
 | `get_history` | git history for a path — the raw material for "why" | git |
 | `workspace_impact` | cross-repo blast radius (only when a `keel.workspace.json` is present) | workspace graph |
 | `upgrade_scope` | who imports a dependency, and what its bump actually breaks | graph + executed sim |
+| `upgrade_repair` | one turn of a repair loop: the next break, with the context to fix it | graph + executed sim |
 
 CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>`):
 
@@ -89,7 +90,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `prompt-context` | Claude Code UserPromptSubmit hook: inject decisions relevant to the prompt |
 | `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
-| `upgrade` | scope a dependency upgrade and prove what it breaks — executed, report-only; `--scope-only`, `--json` |
+| `upgrade` | scope a dependency upgrade and prove what it breaks; `--repair` for the agent loop, `--scope-only`, `--json` |
 | `doctor` | check the environment is healthy (Node/git, db, a timed graph build, runners, tokens, registration); `--json`, `--no-graph`, exit 1 on red |
 
 ## Quick start
@@ -125,8 +126,26 @@ verdict for the bare bump under your `keel.policy.json`.
 
 Failures your CI has proven flaky are discounted **and listed as discounted**, so you can disagree.
 
-This phase is **report only** — it attempts no repairs, and says so in its output. Every failure
-comes back as a work item for you or your agent. Agent-driven repair is Phase 1 (docs/roadmap.md).
+Without `--repair` this is **report only** — it attempts no repairs, and says so in its output.
+
+### Repairing it — the loop
+
+```bash
+keel upgrade lodash@5 --repair                              # the next break, with the fix context
+keel upgrade lodash@5 --repair --patch fix.diff --attempt 2 # prove your patch; get the next one
+```
+
+Keel does not write the fix — no flagship-model calls server-side, ever — so the loop is inverted:
+keel is its *other half*. Each call hands back **one** break with everything needed to fix it: the
+failing test and trace, the import site and its source, which of the package's exports that file
+uses, and the package's own account of the change (its CHANGELOG sliced between the two versions,
+plus a real diff of its manifest and entry file). You write a unified diff; keel re-runs — including
+the tests covering whatever your patch touched, so a fix outside the original surface still has to
+be proven — and either hands back the next task or reports `green`.
+
+It's stateless: you hold the accumulated patch, so pass the whole diff each time. Past
+`--max-attempts` the status is `exhausted` and keel issues no further tasks. Exit codes: 0 green,
+2 work remaining, 1 exhausted or blocked.
 
 ## Mining decisions — model providers
 

@@ -220,6 +220,50 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
   );
 
   server.tool(
+    "upgrade_repair",
+    "One turn of an upgrade repair loop. YOU write the fix — keel scopes, executes and judges it " +
+      "(it makes no model calls). Call with no patch to get the first break; keel applies the " +
+      "version bump in a throwaway worktree, installs, runs the covering tests, and returns ONE " +
+      "task with everything needed to fix it: the failing test and trace, the import site and its " +
+      "source, which of the package's exports that file actually uses, and the package's own " +
+      "account of the change (its CHANGELOG sliced between the two versions, plus a real diff of " +
+      "its manifest and entry file). Write a unified diff against HEAD, send it back as `patch` " +
+      "with `attempt` incremented, and keel re-runs — now also running the tests covering whatever " +
+      "your patch touched, so a fix outside the original surface still has to be proven. Repeat " +
+      "until status is `green`. Stateless: YOU hold the accumulated patch, so pass the whole diff " +
+      "each time. Statuses: green (done), work (task attached), exhausted (attempts spent — stop " +
+      "and escalate), blocked (nothing could be proven, e.g. the patch doesn't apply). An " +
+      "install-time break (peer conflict, engine mismatch) is a `manifest` task and comes first: " +
+      "until it's fixed the tests ran against a tree the package didn't ask for.",
+    {
+      package: z.string().describe("Package name, e.g. `lodash` or `@scope/pkg`"),
+      version: z.string().optional().describe("Target version, range, or dist-tag (default `latest`)"),
+      patch: z.string().optional().describe("Your accumulated repair: a unified diff against HEAD. Omit on the first call"),
+      attempt: z.number().int().min(1).optional().describe("Which attempt this is (default 1)"),
+      maxAttempts: z.number().int().min(1).optional().describe("Stop issuing tasks past this many attempts (default 10)"),
+      maxTests: z.number().int().min(0).optional().describe("Cap the tests run per attempt (default 50)"),
+      maxSeconds: z.number().int().min(1).optional().describe("Wall-time cap for install + tests (default 300)"),
+    },
+    async ({ package: pkg, version, patch, attempt, maxAttempts, maxTests, maxSeconds }) => {
+      try {
+        const { runRepairStep } = await import("../upgrade/repair.js");
+        return json(
+          await runRepairStep(repoRoot, `${pkg}@${version ?? "latest"}`, {
+            ...(patch !== undefined ? { patch } : {}),
+            ...(attempt !== undefined ? { attempt } : {}),
+            ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+            ...(maxTests !== undefined ? { maxTests } : {}),
+            ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+            ...(store ? { store } : {}),
+          }),
+        );
+      } catch (err) {
+        return json({ error: `upgrade_repair failed: ${(err as Error).message}` });
+      }
+    },
+  );
+
+  server.tool(
     "get_history",
     "Recent git history for a file or directory: who changed it, when, and why " +
       "(commit subjects and bodies). The raw material for 'why is this like this?'.",

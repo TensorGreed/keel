@@ -12,7 +12,11 @@
  * about its own limits — the share of the repo reached and the part of the surface no test covers
  * are the two numbers that decide whether an upgrade's green run means anything.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { transitiveDependents, type FileGraph } from "../graph/dependencies.js";
+import { toRepoRelative } from "../graph/shared.js";
+import { canonicalPath } from "../util/platform.js";
 import { isTestFile, selectTests, type TestSelection } from "../simulate/select-tests.js";
 
 export interface UpgradeScope {
@@ -32,6 +36,8 @@ export interface UpgradeScope {
   uncoveredSurface: string[];
   /** test file -> shortest import chain back to an import site: [test, …, site] */
   paths: Record<string, string[]>;
+  /** anything that makes the numbers above mean less than they appear to */
+  notes: string[];
 }
 
 /**
@@ -42,8 +48,30 @@ export function specifierMatchesPackage(specifier: string, pkg: string): boolean
   return specifier === pkg || specifier.startsWith(`${pkg}/`);
 }
 
-/** Scope an upgrade of `pkg` over an already-built graph. Pure: no IO, no execution. */
-export function scopeUpgrade(graph: FileGraph, pkg: string): UpgradeScope {
+/**
+ * Is this package actually in-repo source wearing a dependency's name? A workspace package or a
+ * `file:`/`link:` dependency installs as a symlink from node_modules to a directory inside the repo,
+ * and the graph — correctly — resolves imports of it to those real files. They are therefore ordinary
+ * in-repo edges, NOT external specifiers, so an upgrade scope would find zero import sites and report
+ * a confident-looking zero. Detecting the link is what lets us say why instead.
+ */
+function linkedInRepo(repoRoot: string, pkg: string): string | null {
+  const link = path.join(repoRoot, "node_modules", ...pkg.split("/"));
+  try {
+    if (!fs.lstatSync(link).isSymbolicLink()) return null;
+  } catch {
+    return null;
+  }
+  const real = canonicalPath(link);
+  const root = canonicalPath(repoRoot);
+  return real === root || real.startsWith(root + path.sep) ? toRepoRelative(root, real) : null;
+}
+
+/**
+ * Scope an upgrade of `pkg` over an already-built graph. `repoRoot` is optional and used only to
+ * explain an empty result (see linkedInRepo); the analysis itself is pure.
+ */
+export function scopeUpgrade(graph: FileGraph, pkg: string, repoRoot?: string): UpgradeScope {
   const importSites: string[] = [];
   const specifiers = new Set<string>();
   for (const [file, specs] of graph.externalImports) {
@@ -70,6 +98,19 @@ export function scopeUpgrade(graph: FileGraph, pkg: string): UpgradeScope {
   const covered = coveredBySelectedTests(graph, testsSelected);
   const uncoveredSurface = [...surface].filter((f) => !isTestFile(f) && !covered.has(f)).sort();
 
+  const notes: string[] = [];
+  const linked = repoRoot ? linkedInRepo(repoRoot, pkg) : null;
+  if (linked) {
+    notes.push(
+      `${pkg} is linked to in-repo source at ${linked} (a workspace package or a file:/link: ` +
+        `dependency), so keel's graph treats imports of it as ordinary in-repo edges rather than ` +
+        `external ones. Changing it is a source change, not a dependency upgrade — use get_impact or ` +
+        `preflight on those files instead.`,
+    );
+  } else if (importSites.length === 0) {
+    notes.push(`no file in the graph imports ${pkg} — either it is unused, or it is reached only through a dependency of a dependency`);
+  }
+
   const total = graph.files.length;
   return {
     package: pkg,
@@ -80,6 +121,7 @@ export function scopeUpgrade(graph: FileGraph, pkg: string): UpgradeScope {
     testsSelected,
     uncoveredSurface,
     paths: selection.paths,
+    notes,
   };
 }
 

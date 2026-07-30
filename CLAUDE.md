@@ -83,13 +83,21 @@ src/
   workspace/        Cross-repo graph: config.ts (keel.workspace.json), graph.ts (merge member
                     graphs, namespace as name::path, add cross-repo edges), cli.ts (`keel
                     workspace`). Graph/impact layer only — execution/decisions/tools stay single-repo
-  upgrade/          `keel upgrade` (Phase 0, REPORT-ONLY): scope.ts (import sites from the graph's
+  upgrade/          `keel upgrade`. Phase 0 (REPORT-ONLY): scope.ts (import sites from the graph's
                     retained externalImports -> union blast radius + covering tests + uncovered
-                    surface), install.ts (rewrite package.json in the worktree, `npm install` — the
-                    ONE place install runs — and read peer/engine/failure signals out of npm's own
-                    output, warnings included), upgrade.ts (scope -> sandbox prepare-hook -> flaky
-                    discounting -> next steps -> verdict via evaluatePolicy), report.ts (table),
-                    cli.ts. Attempts no repairs and says so; also the `upgrade_scope` MCP tool
+                    surface; notes a package LINKED to in-repo source, whose zero would otherwise
+                    read as "unused"), install.ts (rewrite package.json in the worktree, `npm
+                    install` — the ONE place install runs — and read peer/engine/failure signals out
+                    of npm's own output, warnings included), execute.ts (the one sandboxed bump both
+                    phases share: patch -> bump+install -> tests -> flaky discounting), upgrade.ts
+                    (-> next steps -> verdict via evaluatePolicy), report.ts, cli.ts.
+                    Phase 1 (repair loop): repair.ts (INVERTED and STATELESS — keel can't write the
+                    fix, so each call proves the caller's accumulated patch and hands back ONE task
+                    or green/exhausted/blocked; tests run = upgrade surface + whatever the patch
+                    touched) and evidence.ts (symbols in play via a single-file re-scan, CHANGELOG
+                    sliced between the versions, `git diff --no-index` of the package's own manifest
+                    and entry — and a note for whatever it could NOT establish).
+                    MCP: `upgrade_scope`, `upgrade_repair`
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests; `prepare` hook +

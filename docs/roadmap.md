@@ -151,11 +151,15 @@ broken.
       breaks in their own right. Report: surface, executed failures with traces and graph paths back
       to the import sites, known-flaky failures discounted **and labelled as such**, uncovered
       surface, and a verdict for the bare bump. Attempts no repairs, and says so.
-- [ ] **Phase 1 — agent-driven repair loop.** Hand the caller's agent one failure at a time with
-      everything needed to fix it — the failing test, the trace, the import site, the package's own
-      changelog/diff for the symbols in play — then re-run the sim on the proposed patch and iterate
-      until green or budget-exhausted. Keel scopes, executes, and judges; the agent writes the code
-      (principle 1: no flagship-model calls server-side).
+- [x] **Phase 1 — agent-driven repair loop.** `keel upgrade --repair` and the `upgrade_repair` MCP
+      tool hand the caller's agent ONE failure at a time with everything needed to fix it — the
+      failing test and trace, the import site and its source, which of the package's exports that
+      file actually uses, and the package's own account of the change (its CHANGELOG sliced between
+      the two versions, plus a real diff of its manifest and entry file). The agent writes the patch;
+      keel re-runs the sim on it — now also running the tests covering whatever the patch touched —
+      and iterates until `green` or `exhausted`. The loop is INVERTED and STATELESS: keel can't write
+      the fix (principle 1), so it is the loop's other half, and the agent holds the accumulated
+      patch rather than keel holding a session.
 - [ ] **Phase 2 — memory-informed repair.** Consult the decision index before proposing anything: a
       pin with a recorded reason ("held back at 4.x, see #812 — the 5.x codec breaks our uploads") is
       a decision the upgrade may be contradicting, surfaced with its receipt. Past repairs of the

@@ -17,37 +17,23 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadHeadGraph } from "../graph/cache.js";
-import { detectFlakyTests, flakyMatcher } from "../ci/flaky.js";
-import { runSandbox, type Runner, type RunStatus } from "../simulate/sandbox.js";
+import type { Runner, RunStatus } from "../simulate/sandbox.js";
 import { evaluatePolicy, type VerdictLevel, type VerdictReason } from "../trust/verdict.js";
 import { loadPolicy } from "../trust/policy.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
-import { bumpAndInstall, findDeclaration, type BumpResult, type InstallSignal } from "./install.js";
+import { findDeclaration, type InstallSignal } from "./install.js";
+import { executeBump, type UpgradeFailure } from "./execute.js";
 import { scopeUpgrade, type UpgradeScope } from "./scope.js";
+
+export type { UpgradeFailure };
 
 const DEFAULT_MAX_TESTS = 50;
 /** Generous next to preflight's 120s: this run pays for an `npm install` before a test can start. */
 const DEFAULT_MAX_SECONDS = 300;
-/** Recent ci_run events scanned for the flaky signal — same bound the trust layer uses. */
-const FLAKY_RUN_WINDOW = 300;
 
 export const REPORT_ONLY_NOTICE =
   "REPORT ONLY — keel attempted no repairs. Every failure below is a work item, not a fix. " +
   "The worktree used for this run has been destroyed; your checkout is untouched.";
-
-export interface UpgradeFailure {
-  test: string;
-  file?: string;
-  message: string;
-  trace?: string;
-  /** import chain from the failing test back to the import site that likely caused it */
-  graphPath?: string[];
-  /** the import site the graph path lands on — the call site to look at first */
-  importSite?: string;
-  kind?: "collection-error";
-  /** true when CI has seen this exact test pass AND fail on one commit; discounted, never hidden */
-  flaky?: boolean;
-}
 
 export interface UpgradeReport {
   package: string;
@@ -127,7 +113,7 @@ export async function runUpgradeAnalysis(
 
   // --- 1. SCOPE (graph) ----------------------------------------------------
   const { graph } = await loadHeadGraph(repoRoot);
-  const scope = scopeUpgrade(graph, pkg);
+  const scope = scopeUpgrade(graph, pkg, repoRoot);
 
   // Order by shortest chain to an import site, so under the cap the tests nearest the dependency run
   // first — the same prioritization preflight uses.
@@ -153,54 +139,19 @@ export async function runUpgradeAnalysis(
   }
 
   // --- 2. BREAK DISCOVERY (preflight) --------------------------------------
-  // `diff: ""` means a clean checkout of HEAD with nothing applied — the bump is the ONLY change,
-  // made by the prepare hook. node_modules is not shared: this run needs its own dependency tree.
-  // A holder rather than a bare `let`: the assignment happens inside the prepare callback, which
-  // TypeScript's control flow can't see, so a plain local would narrow to `never` after the call.
-  const captured: { bump: BumpResult | null } = { bump: null };
-  const sandbox = await runSandbox(repoRoot, {
-    diff: "",
+  const run = await executeBump(repoRoot, {
+    pkg,
+    spec,
     testFiles: toRun,
     timeoutMs: maxSeconds * 1000,
-    maxTests: toRun.length, // already capped above; don't let the sandbox re-cap
-    linkNodeModules: false,
-    prepare: async (worktree, budgetMs) => {
-      const result = await bumpAndInstall(worktree, pkg, spec, budgetMs);
-      captured.bump = result;
-      // An install that never completed is terminal — there is nothing to test. A completed install
-      // with peer/engine warnings is NOT: those are reported, and the tests still run.
-      if (result.error) return { error: result.error, status: "error" as const, output: result.output };
-      if (result.exitCode !== null && result.exitCode !== 0) {
-        return { error: `npm install failed (exit ${result.exitCode})`, status: "error" as const, output: result.output };
-      }
-      return { output: result.output };
-    },
+    paths: scope.paths,
+    importSites: scope.importSites,
+    ...(options.store ? { store: options.store } : {}),
   });
-
-  const installed = captured.bump;
-  const siteSet = new Set(scope.importSites);
-  const allFailures: UpgradeFailure[] = (sandbox.failures ?? []).map((f) => {
-    const graphPath = f.file ? scope.paths[f.file] : undefined;
-    const importSite = graphPath?.find((step) => siteSet.has(step));
-    return {
-      test: f.name,
-      ...(f.file ? { file: f.file } : {}),
-      message: f.message,
-      ...(f.trace ? { trace: f.trace } : {}),
-      ...(graphPath ? { graphPath } : {}),
-      ...(importSite ? { importSite } : {}),
-      ...(f.kind ? { kind: f.kind } : {}),
-    };
-  });
-
-  // Flaky discounting, applied AND labelled. A discounted failure stays in the report under its own
-  // heading — the point is that the reader can see what was discounted and disagree.
-  if (options.store && allFailures.length > 0) {
-    const match = flakyMatcher(detectFlakyTests(await options.store.byKind("ci_run", FLAKY_RUN_WINDOW)));
-    for (const f of allFailures) if (match.isFlaky(f.test, f.file)) f.flaky = true;
-  }
-  const failures = allFailures.filter((f) => !f.flaky);
-  const discountedFlaky = allFailures.filter((f) => f.flaky);
+  const installed = run.bump;
+  const sandbox = run.sandbox;
+  const failures = run.failures;
+  const discountedFlaky = run.discountedFlaky;
 
   return assemble(repoRoot, pkg, spec, scope, budget, {
     from: installed?.from ?? null,

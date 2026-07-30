@@ -9,7 +9,9 @@
  */
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
-import { renderUpgradeReport } from "./report.js";
+import * as fs from "node:fs";
+import { renderRepairStep, renderUpgradeReport } from "./report.js";
+import { runRepairStep } from "./repair.js";
 import { runUpgradeAnalysis } from "./upgrade.js";
 
 const UPGRADE_HELP = `keel upgrade — scope a dependency upgrade and prove what it breaks
@@ -22,6 +24,12 @@ Usage: keel upgrade <pkg>@<version|latest> [options]
   --max-tests N     cap the covering tests that run (default 50, or KEEL_MAX_TESTS)
   --max-seconds N   wall-clock cap for install + tests (default 300, or KEEL_MAX_SECONDS)
 
+Repair loop (one failure at a time; YOU write the patch, keel proves it):
+  --repair          report the single next break with the context needed to fix it
+  --patch FILE      a unified diff against HEAD — your repair so far — applied before the bump
+  --attempt N       which attempt this is (default 1); keel stops issuing tasks past --max-attempts
+  --max-attempts N  give up after this many attempts (default 10)
+
 Finds every file importing the package, computes the blast radius and covering tests, then — in a
 throwaway git worktree, never your checkout — applies ONLY the version bump, installs, and runs
 those tests. Reports executed failures with a graph path back to the import site, install-time
@@ -30,7 +38,8 @@ part of the surface no test covers.
 
 REPORT ONLY: this phase attempts no repairs. Every failure is reported as a work item.
 
-Exit codes: 0 pass, 2 warn, 1 block or error. Reads KEEL_REPO or the current directory.`;
+Exit codes: 0 pass, 2 warn, 1 block or error. With --repair: 0 green, 2 work remaining,
+1 exhausted or blocked. Reads KEEL_REPO or the current directory.`;
 
 function flagValue(argv: string[], name: string): string | undefined {
   const index = argv.indexOf(name);
@@ -40,7 +49,7 @@ function flagValue(argv: string[], name: string): string | undefined {
 }
 
 /** Flags that consume the next argv entry — so `--max-tests 5` doesn't read `5` as the package. */
-const VALUE_FLAGS = new Set(["--max-tests", "--max-seconds"]);
+const VALUE_FLAGS = new Set(["--max-tests", "--max-seconds", "--patch", "--attempt", "--max-attempts"]);
 
 /** The first non-flag argument: the upgrade target. */
 export function firstPositional(argv: string[]): string | undefined {
@@ -89,6 +98,10 @@ export async function runUpgrade(argv: string[]): Promise<number> {
   }
 
   try {
+    if (argv.includes("--repair")) {
+      return await repairStep(repoRoot, target, argv, asJson, store);
+    }
+
     const report = await runUpgradeAnalysis(repoRoot, target, {
       ...(maxTests !== undefined ? { maxTests } : {}),
       ...(maxSeconds !== undefined ? { maxSeconds } : {}),
@@ -111,4 +124,43 @@ export async function runUpgrade(argv: string[]): Promise<number> {
   } finally {
     store?.close();
   }
+}
+
+/** One turn of the repair loop: prove the caller's patch, hand back the next task (or GREEN). */
+async function repairStep(
+  repoRoot: string,
+  target: string,
+  argv: string[],
+  asJson: boolean,
+  store: SqliteEventStore | undefined,
+): Promise<number> {
+  const patchFile = flagValue(argv, "--patch");
+  let patch: string | undefined;
+  if (patchFile !== undefined) {
+    try {
+      patch = fs.readFileSync(patchFile, "utf8");
+    } catch (err) {
+      console.error(`[keel] cannot read --patch ${patchFile}: ${(err as Error).message}`);
+      return 1;
+    }
+  }
+
+  const step = await runRepairStep(repoRoot, target, {
+    ...(patch !== undefined ? { patch } : {}),
+    ...(positiveInt(flagValue(argv, "--attempt")) !== undefined ? { attempt: positiveInt(flagValue(argv, "--attempt"))! } : {}),
+    ...(positiveInt(flagValue(argv, "--max-attempts")) !== undefined ? { maxAttempts: positiveInt(flagValue(argv, "--max-attempts"))! } : {}),
+    ...(positiveInt(flagValue(argv, "--max-tests")) !== undefined ? { maxTests: positiveInt(flagValue(argv, "--max-tests"))! } : {}),
+    ...(positiveInt(flagValue(argv, "--max-seconds")) !== undefined ? { maxSeconds: positiveInt(flagValue(argv, "--max-seconds"))! } : {}),
+    ...(store ? { store } : {}),
+  });
+
+  if ("error" in step) {
+    if (asJson) console.log(JSON.stringify(step, null, 2));
+    else console.error(`[keel] ${step.error}`);
+    return 1;
+  }
+
+  console.log(asJson ? JSON.stringify(step, null, 2) : renderRepairStep(step));
+  // 0 only for green. "work" is 2 so a CI gate can't read an unfinished repair as success.
+  return step.status === "green" ? 0 : step.status === "work" ? 2 : 1;
 }

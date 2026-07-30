@@ -31,12 +31,34 @@ schemas may still change between minor versions. Breaking changes are called out
   rather than 0, so it can never be mistaken for a passing gate. Exit codes otherwise match
   `keel verdict`: 0 pass, 2 warn, 1 block or error.
   Roadmap Phase 6 (docs/roadmap.md) sequences the repair phases that build on this.
+- **`keel upgrade --repair` — the agent-driven repair loop (Phase 1).** `--repair` on the CLI and the
+  `upgrade_repair` MCP tool. Keel does not write fixes (principle 1), so the loop is **inverted**:
+  keel is its other half. Each call takes the caller's accumulated patch, applies it *and* the
+  version bump in a throwaway worktree, installs, runs the covering tests, and hands back exactly
+  **one** next task with what's needed to fix it — the failing test and trace, the import site and
+  its source, which of the package's exports that file actually uses, and the package's own account
+  of the change: its CHANGELOG sliced between the two installed versions (with the lines naming
+  those symbols pulled out) plus a real `git diff` of its manifest and entry file. What the evidence
+  could *not* establish is stated as a note rather than left quietly empty.
+  It is also **stateless** — the agent holds the patch, so there are no sessions to leak and two
+  agents can explore different repair paths concurrently. Re-runs include the tests covering
+  whatever the patch touched, so a fix outside the original upgrade surface still has to be proven.
+  Statuses: `green`, `work` (task attached), `exhausted` (attempts spent — stop and escalate),
+  `blocked` (nothing could be proven, e.g. the patch doesn't apply). Install-time breaks are
+  `manifest` tasks and are issued first: until one is fixed, the tests ran against a tree the
+  package never asked for. Exit codes: 0 green, 2 work remaining, 1 exhausted or blocked.
+- **The upgrade scope explains a zero.** A package linked to in-repo source — a workspace package,
+  or a `file:`/`link:` dependency pointing inside the repo — resolves to real files, so it has no
+  *external* import sites and previously reported a confident-looking `0`. It now says so, and
+  points at `get_impact`/`preflight` instead.
 - **Structured failures from `node --test`.** The JS sandbox runner now drives Node's built-in
   `junit` reporter alongside `spec`, so a zero-dependency repo gets per-test failures with file,
   message and stack — parsed by the same `keel ci` parser — instead of just a non-zero exit.
 
 ### Changed
 
+- `scopeUpgrade` takes an optional `repoRoot` (used only to explain an empty result) and returns a
+  `notes` array alongside the existing fields.
 - `runSandbox` gains a `prepare` hook (run after the worktree exists, before the runner is chosen,
   sharing the wall-clock budget) and a `linkNodeModules` flag. `keel upgrade` needs both: its change
   isn't expressible as a diff, and sharing the host's `node_modules` would test the version it is

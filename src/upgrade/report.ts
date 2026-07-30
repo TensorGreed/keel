@@ -9,6 +9,7 @@
  * like a to-do list keel was about to start on.
  */
 import type { UpgradeFailure, UpgradeReport } from "./upgrade.js";
+import type { RepairStep, RepairTask } from "./repair.js";
 
 const BULLET = "  •";
 
@@ -33,6 +34,7 @@ export function renderUpgradeReport(report: UpgradeReport): string {
     `  uncovered:      ${s.uncoveredSurface.length} file(s) in the surface reached by no test` +
       (s.uncoveredSurface.length > 0 ? " — a green run does NOT clear these" : ""),
   );
+  for (const note of s.notes) out.push(`  note: ${note}`);
   out.push("");
 
   // A scope-only run installed nothing and executed nothing. Saying so is the whole difference
@@ -110,4 +112,121 @@ function renderFailure(f: UpgradeFailure): string[] {
   if (f.graphPath && f.graphPath.length > 1) lines.push(`      graph path:  ${f.graphPath.join(" → ")}`);
   if (f.kind === "collection-error") lines.push("      (the test file could not even be loaded)");
   return lines;
+}
+
+/**
+ * Rendering a repair step. Where the Phase 0 report answers "what breaks?", this answers "what do I
+ * do next?" — so it leads with the status and the single task, and puts the evidence the agent needs
+ * to write the patch (the call site, the symbols it uses, the package's own account of the change)
+ * inline rather than behind another call.
+ */
+export function renderRepairStep(step: RepairStep): string {
+  const out: string[] = [];
+  out.push(`keel upgrade --repair — ${step.package}@${step.requested}${step.installedVersion ? ` → ${step.installedVersion}` : ""}`);
+  out.push(`  attempt ${step.attempt}/${step.maxAttempts} · ${step.testsRun.length} test(s) run · status: ${step.status.toUpperCase()}`);
+  out.push(`  ${step.contract}`);
+  for (const note of step.scope.notes) out.push(`  note: ${note}`);
+  out.push("");
+
+  if (step.status === "blocked") {
+    out.push("BLOCKED — nothing was proven, so there is nothing to repair against.");
+    out.push(`  ${step.blocked ?? "the step could not be evaluated"}`);
+    if (step.executed.output) out.push(`  output tail:\n${indent(step.executed.output, 4)}`);
+    return out.join("\n");
+  }
+
+  if (step.status === "green") {
+    out.push("GREEN — the bump installs cleanly and every selected test passes.");
+    out.push(`  ${step.executed.passed ?? 0} passed across ${step.testsRun.length} test file(s) in ${(step.executed.durationMs / 1000).toFixed(1)}s`);
+    if (step.scope.uncoveredSurface.length > 0) {
+      out.push(
+        `  Still unproven: ${step.scope.uncoveredSurface.length} file(s) in the upgrade surface are ` +
+          `reached by no test (${step.scope.uncoveredSurface.slice(0, 3).join(", ")}).`,
+      );
+    }
+    if (step.executed.discountedFlaky.length > 0) {
+      out.push(`  ${step.executed.discountedFlaky.length} failure(s) discounted as flaky per CI history — listed below, so you can disagree:`);
+      for (const f of step.executed.discountedFlaky) out.push(`    • ${f.test}${f.file ? ` (${f.file})` : ""}: ${f.message}`);
+    }
+    return out.join("\n");
+  }
+
+  // --- work / exhausted: what's left ---
+  out.push(`Outstanding (${step.outstanding.length})`);
+  for (const line of step.outstanding.slice(0, 10)) out.push(`${BULLET} ${line}`);
+  if (step.outstanding.length > 10) out.push(`     … ${step.outstanding.length - 10} more`);
+  out.push("");
+
+  if (step.status === "exhausted") {
+    out.push(`EXHAUSTED — ${step.attempt} of ${step.maxAttempts} attempts used and still not green.`);
+    out.push("  Keel is issuing no further tasks. Escalate: the remaining breaks are listed above.");
+    return out.join("\n");
+  }
+
+  const task = step.task;
+  if (!task) return out.join("\n");
+
+  out.push(`NEXT TASK (${task.remaining} more behind it) — edit ${task.kind === "manifest" ? "the manifest" : "source"}`);
+  out.push(`  ${task.title}`);
+  if (task.targetFile) out.push(`  file to edit: ${task.targetFile}`);
+  if (task.failure?.graphPath && task.failure.graphPath.length > 1) {
+    out.push(`  graph path:   ${task.failure.graphPath.join(" → ")}`);
+  }
+  if (task.symbolsInPlay && task.symbolsInPlay.length > 0) {
+    // "*" is the scanner's honest over-approximation — a namespace import, or a `require` whose
+    // result it couldn't attribute to names. Spelling that out beats printing a bare asterisk.
+    const whole = task.symbolsInPlay.includes("*");
+    const named = task.symbolsInPlay.filter((s) => s !== "*");
+    const detail = whole
+      ? `the whole module${named.length > 0 ? ` (named: ${named.join(", ")})` : ""} — keel could not narrow this file's import to specific exports, so treat every export as in play`
+      : named.join(", ");
+    out.push(`  symbols used here: ${detail}`);
+  }
+  if (task.failure?.trace) {
+    out.push("");
+    out.push("  Trace");
+    out.push(indent(task.failure.trace, 4));
+  }
+  if (task.installSignal) {
+    out.push("");
+    out.push("  npm said");
+    for (const line of task.installSignal.evidence.slice(0, 6)) out.push(`    ${line}`);
+  }
+  if (task.source) {
+    out.push("");
+    out.push(`  ${task.source.file}`);
+    out.push(indent(task.source.text, 4));
+  }
+  out.push(...renderEvidence(task.evidence));
+
+  out.push("");
+  out.push("Write the patch, then re-run with --patch <file> --attempt " + (step.attempt + 1) + " to prove it.");
+  return out.join("\n");
+}
+
+/** The package's own account of the change — and, just as importantly, where it has none. */
+function renderEvidence(evidence: RepairTask["evidence"]): string[] {
+  if (!evidence) return [];
+  const out: string[] = ["", `  Package evidence (${evidence.fromVersion ?? "?"} → ${evidence.toVersion ?? "?"})`];
+
+  if (evidence.changelog) {
+    const scope = evidence.changelog.spanned ? "the span between the two versions" : "the TOP of the file — NOT the span between the versions";
+    out.push(`    ${evidence.changelog.file} — ${scope}`);
+    if (evidence.changelog.symbolMentions.length > 0) {
+      out.push("    lines naming a symbol you use:");
+      for (const line of evidence.changelog.symbolMentions) out.push(`      ${line.trim()}`);
+    }
+    out.push(indent(evidence.changelog.excerpt, 6));
+  }
+  if (evidence.diff) {
+    out.push(`    the package's own diff (${evidence.diff.files.join(", ")})${evidence.diff.truncated ? " — truncated" : ""}`);
+    out.push(indent(evidence.diff.patch, 6));
+  }
+  for (const note of evidence.notes) out.push(`    note: ${note}`);
+  return out;
+}
+
+function indent(text: string, spaces: number): string {
+  const pad = " ".repeat(spaces);
+  return text.split("\n").map((l) => pad + l).join("\n");
 }
