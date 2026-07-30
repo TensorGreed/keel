@@ -132,6 +132,21 @@ test/               Vitest; fixtures under test/fixtures/
 - Commits: imperative subject, body explains *why*. Update `docs/roadmap.md` checkboxes
   in the same commit as the feature.
 
+## Release checklist
+
+- **Every user-visible change updates `CHANGELOG.md` in the same commit.** User-visible means
+  anything a consumer can observe: a new or changed MCP tool or CLI command, a policy /
+  workspace schema field, an env var, an output shape, an exit code, a graph-cache format
+  bump, a behavioural change in what gates or warns. Pure internals (a refactor, a test, a
+  doc typo) do not. Keep-a-changelog format; add to the topmost unreleased version section,
+  under Added / Changed / Fixed / Security.
+- Cutting a release: rename the unreleased heading to `## [x.y.z] — YYYY-MM-DD`, bump
+  `package.json` `version` to match, update the compare links at the bottom of the changelog,
+  then push a `v x.y.z` tag (no space) — `release.yml` publishes to npm via OIDC trusted
+  publishing on the tag.
+- Pre-1.0, a breaking change goes under **Changed** with a migration note, and bumps the
+  minor version.
+
 ## Where we are
 
 Phase 0 (substrate skeleton) is complete. `get_dependencies` walks import edges via the
