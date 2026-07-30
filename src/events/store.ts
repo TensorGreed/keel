@@ -13,7 +13,9 @@ export type EventKind =
   | "ci_run"
   | "deploy"
   | "incident"
-  | "simulation";
+  | "simulation"
+  /** a repair that made a dependency upgrade green — memory for the next upgrade of that package */
+  | "upgrade_repair";
 
 export interface KeelEvent {
   kind: EventKind;

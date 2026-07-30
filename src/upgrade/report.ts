@@ -10,6 +10,7 @@
  */
 import type { UpgradeFailure, UpgradeReport } from "./upgrade.js";
 import type { RepairStep, RepairTask } from "./repair.js";
+import type { UpgradeMemory } from "./memory.js";
 
 const BULLET = "  •";
 
@@ -36,6 +37,7 @@ export function renderUpgradeReport(report: UpgradeReport): string {
   );
   for (const note of s.notes) out.push(`  note: ${note}`);
   out.push("");
+  out.push(...renderMemory(report.memory));
 
   // A scope-only run installed nothing and executed nothing. Saying so is the whole difference
   // between "this bump is clean" and "we didn't look" — printing a green install section here would
@@ -105,6 +107,44 @@ export function renderUpgradeReport(report: UpgradeReport): string {
   return out.join("\n");
 }
 
+/**
+ * What the team already recorded. Placed BEFORE any executed result on purpose: a pin questions
+ * whether the upgrade should happen at all, and no test outcome answers that.
+ */
+function renderMemory(memory: UpgradeMemory): string[] {
+  if (memory.pins.length === 0 && memory.pastRepairs.length === 0 && memory.notes.length === 0) return [];
+  const out: string[] = ["Team memory"];
+
+  if (memory.pins.length === 0) {
+    out.push("  no recorded decision mentions this dependency");
+  } else {
+    out.push(`  ${memory.pins.length} recorded decision(s) may bear on this upgrade — keel does not judge whether they forbid it:`);
+    for (const pin of memory.pins.slice(0, 5)) {
+      out.push(`${BULLET} [${pin.origin}] ${pin.summary}`);
+      if (pin.rationale) out.push(`      ${pin.rationale}`);
+      out.push(`      receipt: ${pin.source.url ?? pin.source.adrPath ?? (pin.source.pr !== null ? `PR #${pin.source.pr}` : pin.id)}`);
+    }
+    if (memory.pins.length > 5) out.push(`     … ${memory.pins.length - 5} more`);
+  }
+
+  if (memory.pastRepairs.length > 0) {
+    out.push(`  ${memory.pastRepairs.length} previous repair(s) of this package are on record:`);
+    for (const repair of memory.pastRepairs) {
+      out.push(`${BULLET} ${repair.from ?? "?"} → ${repair.to} on ${repair.occurredAt.slice(0, 10)}${repair.attempts ? ` (${repair.attempts} attempt(s))` : ""}`);
+      out.push(`      touched: ${repair.importSites.slice(0, 4).join(", ") || "—"}`);
+      out.push(indent(truncateLines(repair.patch, 20), 6));
+    }
+  }
+  for (const note of memory.notes) out.push(`  note: ${note}`);
+  out.push("");
+  return out;
+}
+
+function truncateLines(text: string, max: number): string {
+  const lines = text.split("\n");
+  return lines.length <= max ? text : `${lines.slice(0, max).join("\n")}\n… (${lines.length - max} more lines)`;
+}
+
 function renderFailure(f: UpgradeFailure): string[] {
   const lines = [`${BULLET} FAIL ${f.test}${f.file ? ` (${f.file})` : ""}`];
   lines.push(`      ${f.message}`);
@@ -127,6 +167,7 @@ export function renderRepairStep(step: RepairStep): string {
   out.push(`  ${step.contract}`);
   for (const note of step.scope.notes) out.push(`  note: ${note}`);
   out.push("");
+  out.push(...renderMemory(step.memory));
 
   if (step.status === "blocked") {
     out.push("BLOCKED — nothing was proven, so there is nothing to repair against.");
@@ -138,6 +179,9 @@ export function renderRepairStep(step: RepairStep): string {
   if (step.status === "green") {
     out.push("GREEN — the bump installs cleanly and every selected test passes.");
     out.push(`  ${step.executed.passed ?? 0} passed across ${step.testsRun.length} test file(s) in ${(step.executed.durationMs / 1000).toFixed(1)}s`);
+    if (step.recorded) {
+      out.push(`  Recorded as team memory (${step.recorded}) — the next upgrade of this package starts from this patch.`);
+    }
     if (step.scope.uncoveredSurface.length > 0) {
       out.push(
         `  Still unproven: ${step.scope.uncoveredSurface.length} file(s) in the upgrade surface are ` +
@@ -198,6 +242,15 @@ export function renderRepairStep(step: RepairStep): string {
     out.push(indent(task.source.text, 4));
   }
   out.push(...renderEvidence(task.evidence));
+
+  if (task.pastRepairs && task.pastRepairs.length > 0) {
+    out.push("");
+    out.push("  This package has been repaired here before — the migration may already be worked out:");
+    for (const repair of task.pastRepairs) {
+      out.push(`    ${repair.from ?? "?"} → ${repair.to} (${repair.occurredAt.slice(0, 10)})`);
+      out.push(indent(truncateLines(repair.patch, 20), 6));
+    }
+  }
 
   out.push("");
   out.push("Write the patch, then re-run with --patch <file> --attempt " + (step.attempt + 1) + " to prove it.");

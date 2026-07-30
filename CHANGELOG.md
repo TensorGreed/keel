@@ -47,6 +47,18 @@ schemas may still change between minor versions. Breaking changes are called out
   `blocked` (nothing could be proven, e.g. the patch doesn't apply). Install-time breaks are
   `manifest` tasks and are issued first: until one is fixed, the tests ran against a tree the
   package never asked for. Exit codes: 0 green, 2 work remaining, 1 exhausted or blocked.
+- **Memory-informed upgrades (Phase 2).** Both `keel upgrade` and the repair loop now consult the
+  decision index *before* anything is proposed. **Pins** — decisions linked through the graph to the
+  files importing the package, unioned with decisions that name the package — come back with their
+  receipts, are listed first in `nextSteps`, and are attached to every repair task, so an agent sees
+  them before it writes a line. Executing a bump proves which tests break; it can never surface that
+  the version was pinned on purpose. Keel surfaces the decision and does **not** rule on whether it
+  forbids the upgrade — the trust layer judges it under the existing `requireDecisionReview` rule,
+  like any other change, so the report always shows a pin while the verdict follows your policy.
+  And the flywheel: a repair that reaches green is written back as an `upgrade_repair` event
+  (idempotent by package + version + patch hash), so the next upgrade of that package starts from
+  the migration the first one worked out. New `EventKind`: `upgrade_repair` — no schema migration,
+  `kind` was already free text.
 - **The upgrade scope explains a zero.** A package linked to in-repo source — a workspace package,
   or a `file:`/`link:` dependency pointing inside the repo — resolves to real files, so it has no
   *external* import sites and previously reported a confident-looking `0`. It now says so, and

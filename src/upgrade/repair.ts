@@ -39,6 +39,8 @@ import type { PackageEvidence } from "./evidence.js";
 import type { InstallSignal } from "./install.js";
 import { parseTarget } from "./upgrade.js";
 import { scopeUpgrade, type UpgradeScope } from "./scope.js";
+import { EMPTY_MEMORY, recallUpgradeMemory, recordRepair, type PastRepair, type UpgradeMemory } from "./memory.js";
+import type { WhyDecision } from "../retrieval/why.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -79,6 +81,10 @@ export interface RepairTask {
   symbolsInPlay?: string[];
   /** the package's own account of the change: changelog span + a diff of its manifest and entry */
   evidence?: PackageEvidence;
+  /** recorded decisions that may bear on this upgrade — read the receipts BEFORE writing a fix */
+  pins?: WhyDecision[];
+  /** how this package was repaired before; the migration may already be worked out */
+  pastRepairs?: PastRepair[];
   /** how many other breaks are queued behind this one */
   remaining: number;
 }
@@ -108,6 +114,10 @@ export interface RepairStep {
   task?: RepairTask;
   /** every outstanding break, one line each, so the agent can see the whole job */
   outstanding: string[];
+  /** what the team already recorded about this dependency */
+  memory: UpgradeMemory;
+  /** set when a green repair was written back to the event log, for the next upgrade of this package */
+  recorded?: string;
   /** stated every step: keel executed and judged; the caller writes the code */
   contract: string;
   /** why the step is blocked, when it is */
@@ -142,6 +152,12 @@ export async function runRepairStep(
   const { graph } = await loadHeadGraph(repoRoot);
   const scope = scopeUpgrade(graph, pkg, repoRoot);
 
+  // Memory first, and attached to every task: an agent about to "fix" an upgrade the team already
+  // rejected needs to see that BEFORE it writes a line, not after the patch is proven.
+  const memory = options.store
+    ? await recallUpgradeMemory(repoRoot, options.store, pkg, scope.importSites, graph)
+    : EMPTY_MEMORY;
+
   // The tests to run are the upgrade's covering tests PLUS the tests covering whatever the patch
   // touched. A repair that edits a file outside the upgrade surface must still be proven — otherwise
   // "green" would only mean "green for the code we were already looking at".
@@ -149,7 +165,7 @@ export async function runRepairStep(
   if (patch) {
     const impact = await getImpact(repoRoot, { diff: patch });
     if ("error" in impact) {
-      return blockedStep(pkg, spec, scope, attempt, maxAttempts, `the patch does not apply to HEAD: ${impact.error}`);
+        return blockedStep(pkg, spec, scope, memory, attempt, maxAttempts, `the patch does not apply to HEAD: ${impact.error}`);
     }
     roots = [...new Set([...roots, ...changedRoots(impact.changedFiles)])];
   }
@@ -189,6 +205,7 @@ export async function runRepairStep(
   };
 
   const base: Omit<RepairStep, "status" | "outstanding"> = {
+    memory,
     package: pkg,
     requested: spec,
     installedVersion: run.bump?.installedVersion ?? null,
@@ -213,7 +230,7 @@ export async function runRepairStep(
     };
   }
 
-  const tasks = buildTasks(repoRoot, pkg, scope, install.signals, run.failures, run.evidence);
+  const tasks = buildTasks(repoRoot, pkg, scope, install.signals, run.failures, run.evidence, memory);
   const outstanding = tasks.map((t) => `[${t.kind}] ${t.title}`);
 
   if (tasks.length === 0) {
@@ -221,7 +238,28 @@ export async function runRepairStep(
     if (!install.ok) {
       return { ...base, status: "blocked", outstanding: [], blocked: install.error ?? "npm install did not complete" };
     }
-    return { ...base, status: "green", outstanding: [] };
+    // A green repair is memory for the next upgrade of this package: record what made it work, so
+    // the second team to hit this breaking change doesn't rediscover the migration from scratch.
+    // Only an actual repair is worth recording — a bump that was already clean taught nobody anything.
+    let recorded: string | undefined;
+    if (options.store && patch) {
+      try {
+        recorded = await recordRepair(options.store, {
+          package: pkg,
+          // The version that WAS installed, not the manifest's specifier: `file:/long/path` or
+          // `^1.0.0` tells a future reader nothing about what this patch migrated from.
+          from: run.evidence?.fromVersion ?? run.bump?.from ?? null,
+          to: run.bump?.installedVersion ?? spec,
+          patch,
+          provenTests: testsRun,
+          importSites: scope.importSites,
+          attempts: attempt,
+        });
+      } catch {
+        recorded = undefined; // recording is a bonus; never let it cost the caller its green result
+      }
+    }
+    return { ...base, status: "green", outstanding: [], ...(recorded ? { recorded } : {}) };
   }
 
   if (attempt >= maxAttempts) {
@@ -243,6 +281,7 @@ function buildTasks(
   signals: InstallSignal[],
   failures: UpgradeFailure[],
   evidence: PackageEvidence | null,
+  memory: UpgradeMemory,
 ): RepairTask[] {
   const tasks: RepairTask[] = [];
 
@@ -253,6 +292,8 @@ function buildTasks(
       installSignal: signal,
       targetFile: "package.json",
       ...(evidence ? { evidence } : {}),
+      ...(memory.pins.length > 0 ? { pins: memory.pins } : {}),
+      ...(memory.pastRepairs.length > 0 ? { pastRepairs: memory.pastRepairs } : {}),
       remaining: 0, // filled in below, once the queue is known
     });
   }
@@ -274,6 +315,8 @@ function buildTasks(
       ...(site ? { source: readSource(repoRoot, site) } : {}),
       ...(site ? { symbolsInPlay: symbolsInPlay(repoRoot, site, pkg) } : {}),
       ...(evidence ? { evidence } : {}),
+      ...(memory.pins.length > 0 ? { pins: memory.pins } : {}),
+      ...(memory.pastRepairs.length > 0 ? { pastRepairs: memory.pastRepairs } : {}),
       remaining: 0,
     });
   }
@@ -298,6 +341,7 @@ function blockedStep(
   pkg: string,
   spec: string,
   scope: UpgradeScope,
+  memory: UpgradeMemory,
   attempt: number,
   maxAttempts: number,
   reason: string,
@@ -314,6 +358,7 @@ function blockedStep(
     install: { ok: false, signals: [] },
     executed: { status: "error", failures: [], discountedFlaky: [], durationMs: 0 },
     outstanding: [],
+    memory,
     contract: AGENT_WRITES_THE_FIX,
     blocked: reason,
   };

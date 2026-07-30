@@ -97,6 +97,10 @@ src/
                     touched) and evidence.ts (symbols in play via a single-file re-scan, CHANGELOG
                     sliced between the versions, `git diff --no-index` of the package's own manifest
                     and entry — and a note for whatever it could NOT establish).
+                    Phase 2 (memory): memory.ts — pins (decisions linked to the import sites UNIONed
+                    with decisions naming the package, receipts attached, surfaced first and never
+                    judged) + past repairs (a green repair is recorded as an `upgrade_repair` event,
+                    idempotent by package+version+patch hash, and returned as context next time).
                     MCP: `upgrade_scope`, `upgrade_repair`
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),

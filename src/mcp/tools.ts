@@ -189,8 +189,11 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
       "ONLY the version bump, runs `npm install`, and executes those tests. Output: { scope " +
       "{ importSites, specifiers, surface, shareOfRepo, testsSelected, uncoveredSurface }, install " +
       "{ ok, signals[{ kind, message, evidence }] }, executed { status, failures[{ test, file, " +
-      "message, trace, graphPath, importSite }], discountedFlaky[] }, nextSteps, reportOnly, " +
-      "verdict, budget }. Install-time problems (peer-dependency conflicts, engine mismatches) are " +
+      "message, trace, graphPath, importSite }], discountedFlaky[] }, memory { pins[], pastRepairs[] }, " +
+      "nextSteps, reportOnly, verdict, budget }. `memory` is what the team already RECORDED about " +
+      "this dependency — a pin with a reason is a decision the upgrade may be reversing, and it is " +
+      "listed first in nextSteps with its receipt; keel surfaces it but does not judge whether it " +
+      "forbids the upgrade. Install-time problems (peer-dependency conflicts, engine mismatches) are " +
       "reported as breaks in their own right. Failures CI has proven flaky are separated into " +
       "discountedFlaky rather than hidden. REPORT ONLY: keel attempts no repairs — every failure " +
       "is a work item for YOU to fix. Pass scopeOnly for the graph answer alone (no install, no " +
@@ -234,7 +237,11 @@ export function registerTools(server: McpServer, repoRoot: string, store?: Sqlit
       "each time. Statuses: green (done), work (task attached), exhausted (attempts spent — stop " +
       "and escalate), blocked (nothing could be proven, e.g. the patch doesn't apply). An " +
       "install-time break (peer conflict, engine mismatch) is a `manifest` task and comes first: " +
-      "until it's fixed the tests ran against a tree the package didn't ask for.",
+      "until it's fixed the tests ran against a tree the package didn't ask for. Every task also " +
+      "carries `pins` (recorded decisions that may bear on this upgrade — READ THESE BEFORE writing " +
+      "a fix; you may be reversing a deliberate pin) and `pastRepairs` (how this package was " +
+      "migrated here before, patch included). On green, keel records the patch as team memory so the " +
+      "next upgrade of this package starts from it.",
     {
       package: z.string().describe("Package name, e.g. `lodash` or `@scope/pkg`"),
       version: z.string().optional().describe("Target version, range, or dist-tag (default `latest`)"),

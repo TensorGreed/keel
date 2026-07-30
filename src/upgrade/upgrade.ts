@@ -22,6 +22,7 @@ import { evaluatePolicy, type VerdictLevel, type VerdictReason } from "../trust/
 import { loadPolicy } from "../trust/policy.js";
 import type { SqliteEventStore } from "../events/sqlite-store.js";
 import { findDeclaration, type InstallSignal } from "./install.js";
+import { EMPTY_MEMORY, recallUpgradeMemory, type UpgradeMemory } from "./memory.js";
 import { executeBump, type UpgradeFailure } from "./execute.js";
 import { scopeUpgrade, type UpgradeScope } from "./scope.js";
 
@@ -66,6 +67,8 @@ export interface UpgradeReport {
   };
   /** every break as a work item, install signals first (they precede any test) */
   nextSteps: string[];
+  /** what the team already recorded about this dependency — pins, and past repairs of it */
+  memory: UpgradeMemory;
   /** stated in the output, every time — this phase repairs nothing */
   reportOnly: string;
   /** true when nothing was installed or executed: the graph answer alone */
@@ -115,6 +118,12 @@ export async function runUpgradeAnalysis(
   const { graph } = await loadHeadGraph(repoRoot);
   const scope = scopeUpgrade(graph, pkg, repoRoot);
 
+  // Memory BEFORE proof: a pin with a recorded reason is a decision this upgrade may be reversing,
+  // and no amount of executing the bump would ever surface it.
+  const memory = options.store
+    ? await recallUpgradeMemory(repoRoot, options.store, pkg, scope.importSites, graph)
+    : EMPTY_MEMORY;
+
   // Order by shortest chain to an import site, so under the cap the tests nearest the dependency run
   // first — the same prioritization preflight uses.
   const ordered = [...scope.testsSelected].sort(
@@ -128,7 +137,7 @@ export async function runUpgradeAnalysis(
     // Still read what package.json declares today. It costs nothing, and reporting "not declared"
     // for a package that plainly IS declared would be a lie by omission.
     const declared = declaredIn(repoRoot, pkg);
-    return assemble(repoRoot, pkg, spec, scope, budget, {
+    return assemble(repoRoot, pkg, spec, scope, budget, memory, {
       from: declared?.spec ?? null,
       section: declared?.section ?? null,
       installedVersion: null,
@@ -153,7 +162,7 @@ export async function runUpgradeAnalysis(
   const failures = run.failures;
   const discountedFlaky = run.discountedFlaky;
 
-  return assemble(repoRoot, pkg, spec, scope, budget, {
+  return assemble(repoRoot, pkg, spec, scope, budget, memory, {
     from: installed?.from ?? null,
     section: installed?.section ?? null,
     installedVersion: installed?.installedVersion ?? null,
@@ -194,6 +203,7 @@ function assemble(
   spec: string,
   scope: UpgradeScope,
   budget: UpgradeReport["budget"],
+  memory: UpgradeMemory,
   parts: AssembleParts,
 ): UpgradeReport {
   const nextSteps: string[] = [];
@@ -215,6 +225,11 @@ function assemble(
   if (parts.scopeOnly) {
     nextSteps.push("[scope-only] no install and no tests were run — re-run without scopeOnly for executed proof");
   }
+  // A pin is the one work item that outranks everything else: it questions whether the upgrade
+  // should happen at all, which no test result can answer.
+  for (const pin of memory.pins.slice(0, 3)) {
+    nextSteps.unshift(`[decision/${pin.origin}] recorded decision may bear on this upgrade: ${pin.summary} (${receiptOf(pin)})`);
+  }
 
   return {
     package: pkg,
@@ -226,9 +241,10 @@ function assemble(
     install: parts.install,
     executed: parts.executed,
     nextSteps,
+    memory,
     reportOnly: REPORT_ONLY_NOTICE,
     scopeOnly: parts.scopeOnly,
-    verdict: judge(repoRoot, scope, parts),
+    verdict: judge(repoRoot, scope, memory, parts),
     budget,
   };
 }
@@ -243,7 +259,12 @@ function assemble(
  * An install signal is added as a synthetic failure so it can never be judged as a pass: a peer
  * conflict is a break the tests were never in a position to catch.
  */
-function judge(repoRoot: string, scope: UpgradeScope, parts: AssembleParts): { verdict: VerdictLevel; reasons: VerdictReason[] } {
+function judge(
+  repoRoot: string,
+  scope: UpgradeScope,
+  memory: UpgradeMemory,
+  parts: AssembleParts,
+): { verdict: VerdictLevel; reasons: VerdictReason[] } {
   const loaded = loadPolicy(repoRoot);
   const policy = "error" in loaded ? undefined : loaded.policy;
   if (!policy) {
@@ -285,8 +306,10 @@ function judge(repoRoot: string, scope: UpgradeScope, parts: AssembleParts): { v
       },
       uncoveredChanges: scope.uncoveredSurface,
       testsSelected: scope.testsSelected,
-      relevantDecisions: [], // Phase 2 wires the decision index in ("why is this pinned?")
-      hasHumanDecision: false,
+      // Phase 2: the decisions this upgrade may be reversing, judged by the same requireDecisionReview
+      // rule as any other change.
+      relevantDecisions: memory.pins,
+      hasHumanDecision: memory.pins.some((d) => d.origin === "human"),
       forbiddenImports: [],
       foreignChanges: [],
     },
@@ -301,6 +324,11 @@ function declaredIn(repoRoot: string, pkg: string): { section: string; spec: str
   } catch {
     return null;
   }
+}
+
+/** The shortest citation for a decision: its PR link, its ADR path, or the id it was stored under. */
+export function receiptOf(pin: { source: { url: string | null; pr: number | null; adrPath?: string }; id: string }): string {
+  return pin.source.url ?? pin.source.adrPath ?? (pin.source.pr !== null ? `PR #${pin.source.pr}` : pin.id);
 }
 
 function chainLength(chain: string[] | undefined): number {

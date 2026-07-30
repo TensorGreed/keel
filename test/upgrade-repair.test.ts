@@ -257,6 +257,7 @@ describe("repair step rendering", () => {
       executed: { status: "failed", failures: [], discountedFlaky: [], durationMs: 10 },
       task: { kind: "source", title: "boom", targetFile: "src/welcome.js", symbolsInPlay: ["*"], remaining: 0 },
       outstanding: ["[source] boom"],
+      memory: { pins: [], pastRepairs: [], notes: [] },
       contract: AGENT_WRITES_THE_FIX,
     });
     expect(text).toContain("the whole module");

@@ -147,6 +147,20 @@ It's stateless: you hold the accumulated patch, so pass the whole diff each time
 `--max-attempts` the status is `exhausted` and keel issues no further tasks. Exit codes: 0 green,
 2 work remaining, 1 exhausted or blocked.
 
+### What the team already decided
+
+Both the report and every repair task carry **team memory**, consulted before anything is proposed:
+
+- **Pins** — recorded decisions that may bear on this dependency, found by graph linkage to the
+  importing files *and* by naming the package, each with its receipt. *"Hold greeter at 1.x — the
+  2.x signature breaks every call site, see #812"* is listed first, ahead of any test result: no
+  amount of executing a bump surfaces that it was already rejected. Keel surfaces it and does not
+  rule on it; your `keel.policy.json` decides whether it gates, under the same
+  `requireDecisionReview` rule as any other change.
+- **Past repairs** — when a repair reaches green, keel records the patch that made it work. The next
+  upgrade of that package starts from it. The second person to hit a breaking change shouldn't have
+  to rediscover the migration the first one already worked out.
+
 ## Mining decisions — model providers
 
 `keel mine` extracts the "why" from ingested PR threads. It is the **only** part of Keel that calls a

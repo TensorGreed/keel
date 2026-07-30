@@ -4,7 +4,8 @@
 
 CREATE TABLE IF NOT EXISTS events (
   id          INTEGER PRIMARY KEY,
-  kind        TEXT NOT NULL,         -- commit | pr | review_comment | decision | ci_run | deploy | incident | simulation
+  kind        TEXT NOT NULL,         -- commit | pr | review_comment | decision | ci_run | deploy
+                                     -- | incident | simulation | upgrade_repair
   external_id TEXT,                  -- e.g. commit sha, PR number, CI run id
   occurred_at TEXT NOT NULL,         -- ISO 8601
   actor       TEXT,                  -- author/committer/bot

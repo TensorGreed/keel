@@ -160,10 +160,15 @@ broken.
       and iterates until `green` or `exhausted`. The loop is INVERTED and STATELESS: keel can't write
       the fix (principle 1), so it is the loop's other half, and the agent holds the accumulated
       patch rather than keel holding a session.
-- [ ] **Phase 2 — memory-informed repair.** Consult the decision index before proposing anything: a
-      pin with a recorded reason ("held back at 4.x, see #812 — the 5.x codec breaks our uploads") is
-      a decision the upgrade may be contradicting, surfaced with its receipt. Past repairs of the
-      same package become context for the next one.
+- [x] **Phase 2 — memory-informed repair.** Before anything is proposed, keel consults the decision
+      index: decisions linked through the graph to the files that import the package, unioned with
+      decisions that name the package, each with its receipt. A pin with a recorded reason ("held
+      back at 4.x, see #812 — the 5.x codec breaks our uploads") is listed FIRST in next-steps and
+      attached to every repair task, so an agent sees it before it writes a line. Keel surfaces it;
+      it does not rule on whether the pin forbids the upgrade (the trust layer judges it under the
+      existing `requireDecisionReview` rule, like any other change). And the flywheel: a repair that
+      reaches green is written back to the event log as an `upgrade_repair` event, so the next
+      upgrade of that package starts from the migration the first one worked out.
 - [ ] **Phase 3 — batch + policy.** Many packages in one pass, ordered by blast radius and risk;
       `keel.policy.json` gains upgrade rules (what may auto-merge on green, what always needs a
       human, which packages are pinned and why). The output is a set of PRs, each carrying its own
