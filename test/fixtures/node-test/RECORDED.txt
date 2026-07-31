@@ -1,0 +1,13 @@
+Recorded output of `node --test --test-reporter=junit` over the same two test files.
+
+  junit-node22-one-file.xml   node v22.23.2, one file  (a.test.js)
+  junit-node22-two-files.xml  node v22.23.2, two files (a.test.js, b.test.js)
+  junit-node24-two-files.xml  node v24.14.0, two files (a.test.js, b.test.js)
+
+Recorded from the worktree /tmp/keel-nodetest-wt, where each file declares one passing and one
+failing test. The difference that matters: Node 24 puts a `file` attribute on every <testcase>;
+Node 22 does not. Nothing else about the format differs.
+
+These are snapshots pinned in time, not mirrors of any current Node. Re-record only to add a
+version that behaves differently — and if a Node 22 patch starts emitting `file`, that is a new
+recording, not a reason to delete these.

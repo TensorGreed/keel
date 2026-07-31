@@ -74,6 +74,16 @@ schemas may still change between minor versions. Breaking changes are called out
   (idempotent by package + version + patch hash), so the next upgrade of that package starts from
   the migration the first one worked out. New `EventKind`: `upgrade_repair` — no schema migration,
   `kind` was already free text.
+- **Test-failure file attribution no longer depends on the Node point release.** The `node --test`
+  runner read each failure's file from the junit reporter's `file` attribute — which Node 24 emits
+  and Node 22 does not. On Node 22 every failure arrived with no file and therefore no `graphPath`,
+  so a suite green on one machine failed on another. The reporter was already pinned; what moved was
+  a field inside the pinned format. Attribution now comes from keel's OWN knowledge first — it
+  passes the runner an explicit list of test files, so a single-file run needs no output at all —
+  and from the report only when it points unambiguously at one of those files (the `file` attribute
+  where present, else a unique hit in the stack). An ambiguous match yields no attribution rather
+  than a guess. The same rule now backs the vitest/jest parser. Recorded reporter output from Node
+  22 and 24 drives the parser in unit tests, asserting that the version cannot change the answer.
 - **A bump with no covering tests is no longer reported as a failed install.** The sandbox
   short-circuits when there are no tests to run, so the install never happened — yet the report
   claimed `install: FAILED` and the verdict said pass. The sandbox now runs a `prepare` step even

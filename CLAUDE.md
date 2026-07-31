@@ -111,7 +111,12 @@ src/
                     select-tests.ts (impacted -> covering test files),
                     sandbox.ts (apply diff in a temp worktree, run the tests; `prepare` hook +
                     linkNodeModules:false are the seam `keel upgrade` installs through, and node:test
-                    now reports via its junit reporter so zero-dep repos get structured failures),
+                    reports via its junit reporter so zero-dep repos get structured failures). EVERY
+                    runner is invoked with an explicitly pinned machine-readable reporter, and file
+                    attribution comes from keel's OWN test-file list first (attributeToRanTest) —
+                    output is a fallback and only when unambiguous, because fields inside a pinned
+                    format still move between releases (node's junit `file` attribute: present on
+                    24, absent on 22 — fixtures in test/fixtures/node-test/). See the module header,
                     preflight.ts (impact -> select -> sandbox, budgeted)
   github/           `keel ingest` (GitHub half): backfill PRs + review threads into the event log
                     (remote.ts, client.ts over global fetch, ingest.ts ETL — no deps); cli.ts also

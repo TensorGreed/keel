@@ -12,6 +12,33 @@
  * reusing the ci/junit parser); Go tests under `go test -json` (per package); otherwise, from
  * package.json, vitest or jest (JSON-reported, so failures are structured), else Node's built-in
  * `node --test`. No LLM, no network.
+ *
+ * ## Reporter pinning, and where file attribution comes from
+ *
+ * Every runner is invoked with an EXPLICIT machine-readable reporter — never its default human
+ * output, which changes freely between releases. But pinning the format is only half the job: the
+ * fields *within* a pinned format also move. Node's junit reporter emits a `file` attribute on
+ * Node 24 and not on Node 22 (verified; both recorded in test/fixtures/node-test/), which silently
+ * cost every failure its file and its graph path on one point release.
+ *
+ * So attribution is taken from keel's OWN knowledge wherever possible — it passed the runner an
+ * explicit list of test files — and from the runner's output only as a fallback, and only when that
+ * output points unambiguously at one of those files (see attributeToRanTest):
+ *
+ *   node --test  reporter `junit` (pinned) → parseJUnit → attributeToRanTest: our list first, then
+ *                the `file` attribute if the version emits one, then a unique hit in the stack.
+ *   vitest/jest  reporter `json` (pinned, jest schema) → same rule; the report's own per-suite path
+ *                remains the last resort, since that schema is documented and stable.
+ *   pytest       `--junitxml` (pinned). Emits no per-case `file` at all, and `junit_family` can be
+ *                changed by a repo's ini — so this one ALWAYS reconstructs the file by matching the
+ *                dotted classname/name against the files we asked to run. Already version-proof.
+ *   go test      `-json` (pinned). Attributed by mapping each event's package back to the selected
+ *                `_test.go` file for that package — again our own list, not the output's paths.
+ *   mvn/gradle   Surefire / Gradle JUnit XML (the build tools' fixed report location, not a
+ *                selectable reporter). Attributed via `classname` → the class list we asked for.
+ *
+ * `keel ci` parses JUnit that somebody else's CI produced; there is nothing to pin there, which is
+ * exactly why that parser is a tolerant scanner rather than a shape-matcher.
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -316,11 +343,60 @@ function junitPathFor(jsonFile: string): string {
 }
 
 /**
- * Normalize Node's built-in junit reporter into sandbox counts + failures. Unlike pytest's report
- * this one carries an absolute `file` per case, so attribution needs no reconstruction — just the
- * repo-relative conversion every graph key uses.
+ * Attribute a runner's failure to one of the test files WE asked it to run.
+ *
+ * The order is the point. keel passed an explicit file list, so its own knowledge outranks anything
+ * the runner printed: with a single file every failure belongs to it *by construction*, and no
+ * amount of reporter variation can change that. Only when the run spanned several files does output
+ * get consulted — and then only when it points at exactly one of the files we asked for. An
+ * ambiguous match yields no attribution rather than a plausible guess, because a failure pinned to
+ * the wrong file sends a reader (or an agent) to rewrite code that was never involved.
+ *
+ * Why this exists: Node's junit reporter emits a `file` attribute on 24 and NOT on 22 (verified,
+ * recorded in test/fixtures/node-test/). Depending on it made attribution a function of the
+ * runtime's point release.
  */
-export function nodeTestResults(xml: string, worktree: string): { passed: number; failed: number; failures: TestFailure[] } {
+export function attributeToRanTest(
+  ranTests: string[],
+  worktree: string,
+  reported: { file?: string; trace?: string },
+): string | undefined {
+  // 1. Our own list. One file in, one file everything came from — no output needed.
+  if (ranTests.length === 1) return ranTests[0];
+  if (ranTests.length === 0) return undefined;
+
+  // 2. A file the reporter named, resolved against the list we asked for.
+  if (reported.file) {
+    const rel = toRepoRel(worktree, reported.file);
+    const exact = ranTests.find((t) => t === rel);
+    if (exact) return exact;
+    const suffix = ranTests.filter((t) => rel.endsWith(t) || t.endsWith(rel));
+    if (suffix.length === 1) return suffix[0];
+  }
+
+  // 3. The stack, accepted ONLY on a unique hit. Every reporter version puts the failing test
+  //    file's path in the trace, so this is the version-stable fallback.
+  if (reported.trace) {
+    const hits = ranTests.filter((t) => mentionsPath(reported.trace!, t));
+    if (hits.length === 1) return hits[0];
+  }
+  return undefined;
+}
+
+/** Does `trace` reference this repo-relative file, on a path boundary (so `a.js` ≠ `xa.js`)? */
+function mentionsPath(trace: string, relFile: string): boolean {
+  const escaped = relFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(^|[/\\\\])${escaped}([:)\\s]|$)`).test(trace);
+}
+
+/**
+ * Normalize Node's built-in junit reporter into sandbox counts + failures.
+ *
+ * The reporter is pinned explicitly on the command line (see runnerCommand) so the FORMAT is fixed,
+ * but the fields within it are not stable across Node point releases — hence attributeToRanTest
+ * above rather than trusting the `file` attribute.
+ */
+export function nodeTestResults(xml: string, worktree: string, ranTests: string[]): { passed: number; failed: number; failures: TestFailure[] } {
   const report = parseJUnit(xml);
   let passed = 0;
   const failures: TestFailure[] = [];
@@ -330,9 +406,9 @@ export function nodeTestResults(xml: string, worktree: string): { passed: number
       continue;
     }
     if (t.status === "skipped") continue;
-    const file = t.file ? toRepoRel(worktree, t.file) : undefined;
     const message = (t.message ?? "(no message)").split("\n", 1)[0]!.trim() || "(no message)";
     const trace = t.details ? capLines(stripAnsi(t.details).trim(), MAX_TRACE_LINES) : undefined;
+    const file = attributeToRanTest(ranTests, worktree, { ...(t.file ? { file: t.file } : {}), ...(trace ? { trace } : {}) });
     failures.push({
       name: t.name || "(unnamed test)",
       ...(file ? { file } : {}),
@@ -347,6 +423,7 @@ export function nodeTestResults(xml: string, worktree: string): { passed: number
 export function parseJestJson(
   text: string,
   worktree: string,
+  ranTests: string[] = [],
 ): { passed: number; failed: number; failures: TestFailure[] } | null {
   let data: unknown;
   try {
@@ -367,12 +444,16 @@ export function parseJestJson(
 
   const failures: TestFailure[] = [];
   for (const suite of report.testResults) {
-    const file = suite.name ? toRepoRel(worktree, suite.name) : undefined;
     for (const assertion of suite.assertionResults ?? []) {
       if (assertion.status === "failed") {
         // Keep the full stack the reporter gives us (capped), with message as its first line.
         const trace = capLines((assertion.failureMessages ?? []).join("\n\n").trim(), MAX_TRACE_LINES);
         const message = (trace.split("\n", 1)[0] || "(no message)").trim();
+        // Same rule as the node runner: our own file list first, the report's path second.
+        const file = attributeToRanTest(ranTests, worktree, {
+          ...(suite.name ? { file: suite.name } : {}),
+          ...(trace ? { trace } : {}),
+        }) ?? (suite.name ? toRepoRel(worktree, suite.name) : undefined);
         failures.push({
           name: assertion.fullName || assertion.title || "(unnamed test)",
           ...(file ? { file } : {}),
@@ -1208,8 +1289,8 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
     try {
       structured =
         runner === "node"
-          ? nodeTestResults(fs.readFileSync(junitPathFor(jsonFile), "utf8"), worktree)
-          : parseJestJson(fs.readFileSync(jsonFile, "utf8"), worktree);
+          ? nodeTestResults(fs.readFileSync(junitPathFor(jsonFile), "utf8"), worktree, ranTests)
+          : parseJestJson(fs.readFileSync(jsonFile, "utf8"), worktree, ranTests);
     } catch {
       structured = null; // no report written (a crash before any test ran) — the output tail stands in
     }
