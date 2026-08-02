@@ -205,6 +205,25 @@ no mining, no model, no waiting.
       (`KEEL_NO_WATCH=1` to disable); `keel watch` runs it in the foreground outside a session, and
       `keel doctor` reports whether it's supported and enabled.
 
+## Phase 8 — Evidence
+
+Goal: stop asserting that keel works and start measuring it. Every claim keel makes is falsifiable —
+`select_tests` says these 12 of 840 matter, `preflight` says these 3 fail, `verdict` says pass — and
+CI, commits and reverts all answer. **Demo:** a number anyone can reproduce on their own repo.
+
+- [x] **Selection evidence by fault injection** (`keel evidence`). Break a covered source file, run
+      the WHOLE suite to find out what really fails, and check whether keel's selection contained it.
+      Reports the escape rate (a failing test keel didn't select — the number that matters) and
+      selectivity (the share of the suite skipped — the benefit, worth nothing until escapes are
+      zero). Deterministic by seed, runs in a throwaway worktree, needs no users and no accumulated
+      history. On keel itself: **0 escapes in 10 measured trials, 86.8% selectivity.**
+- [ ] **Claim instrumentation.** A `tool_call` event recording what each MCP tool claimed — which
+      tests selected, which failures predicted, which verdict — so real usage can later be scored
+      against what actually happened.
+- [ ] **`keel evidence --backtest`.** Join those recorded claims to ingested CI runs: preflight
+      precision/recall against real failures, verdict calibration against what later broke, and
+      compute avoided measured from the suite's own recorded per-test timings.
+
 ## Later
 
 Team deployment, policy sharing, incident + Jira connectors, service-level graphs.

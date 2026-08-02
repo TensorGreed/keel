@@ -56,6 +56,12 @@ src/
                     verdict, report, prompt-context, doctor, upgrade, watch
   serve.ts          Starts the MCP server over stdio; loads .keel-decisions.jsonl into the index,
                     ingests commits, warms the graph, and starts the pre-warm watcher
+  evidence/         `keel evidence`: mutate.ts (syntax-safe, deterministic mechanical faults — one
+                    site per line, seeded, no clock), selection.ts (ONE reused worktree; per trial:
+                    inject a fault, take keel's selection, run the WHOLE suite as the oracle, and
+                    count failures OUTSIDE the selection as escapes; `undetected` = the repo's
+                    coverage gap, excluded from the denominator, never counted as a keel win),
+                    report.ts, cli.ts. Exit 1 on any escape
   watch/            `keel watch`: watcher.ts (debounced fs.watch, no deps; refreshes the graph in the
                     background so a rebuild never lands inside a tool call — MEASURED 2321ms -> 46ms
                     for the next call after a file add; the module header says why this is a watcher
@@ -115,7 +121,9 @@ src/
                     MCP: `upgrade_scope`, `upgrade_repair`, `upgrade_batch`
   simulate/         Flight simulator: impact.ts (diff -> impacted subgraph),
                     select-tests.ts (impacted -> covering test files),
-                    sandbox.ts (apply diff in a temp worktree, run the tests; `prepare` hook +
+                    sandbox.ts (apply diff in a temp worktree, run the tests; runJsTests is the
+                    runner half, shared with the evidence harness so a measurement of selection can
+                    never measure a different runner than preflight uses; `prepare` hook +
                     linkNodeModules:false are the seam `keel upgrade` installs through, and node:test
                     reports via its junit reporter so zero-dep repos get structured failures). EVERY
                     runner is invoked with an explicitly pinned machine-readable reporter, and file

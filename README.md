@@ -93,6 +93,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
 | `upgrade` | scope a dependency upgrade and prove what it breaks; `--repair` for the agent loop, `--batch` for many, `--scope-only`, `--json` |
 | `watch` | keep the graph warm as files change (the MCP server does this itself) |
+| `evidence` | measure whether test selection catches what breaks (fault injection); exit 1 on an escape |
 | `doctor` | check the environment is healthy (Node/git, db, a timed graph build, runners, tokens, registration); `--json`, `--no-graph`, exit 1 on red |
 
 ## Quick start
@@ -199,6 +200,29 @@ Each executed entry carries a **PR proposal**: branch, title, a body containing 
 a manifest patch `git apply` accepts, and the commands to open it. Keel composes these and **never
 pushes a branch or opens a PR** — that runs under your credentials against your remote, and it isn't
 keel's to assume.
+
+## Does it actually work?
+
+Keel's central claim is that of your 800 tests, these 12 are the ones that matter. `keel evidence`
+measures that claim instead of asserting it — it breaks a covered source file, runs the **whole**
+suite to find out what really fails, and checks whether keel's selection contained it.
+
+```bash
+keel evidence --trials 20 --include src/
+```
+
+Two numbers come out, and only one of them matters first:
+
+- **Escape rate** — a test failed that keel did *not* select. An escape means `preflight` would have
+  reported green on a change that breaks your build, which is worse than having no selection at all.
+- **Selectivity** — the share of the suite it skipped. The benefit. Worth nothing unless escapes are
+  zero.
+
+On Keel's own repo: **0 escapes in 10 measured trials, 86.8% selectivity** — 24 of 182 test files
+run on average. Trials where the suite never noticed the fault are reported separately as
+`undetected`; that's a gap in *your* coverage, not a keel success, so it's excluded from the
+denominator rather than quietly counted as a win. Deterministic by seed, runs in a throwaway
+worktree, exits 1 on any escape.
 
 ## Staying warm
 

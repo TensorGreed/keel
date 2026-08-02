@@ -9,6 +9,22 @@ Keel is pre-1.0: the MCP tool surface and the `keel.policy.json` / `keel.workspa
 schemas may still change between minor versions. Breaking changes are called out under
 **Changed** with a migration note.
 
+## [Unreleased]
+
+### Added
+
+- **`keel evidence` — measure whether test selection actually catches what breaks.** Fault
+  injection: break a covered source file, run the **whole** suite to find out what really fails, and
+  check whether keel's selection contained it. Reports the **escape rate** (a failing test keel did
+  not select — an escape means `preflight` would have said green on a real break) and **selectivity**
+  (the share of the suite skipped, which is only a benefit while escapes are zero). Deterministic by
+  seed, runs in a throwaway git worktree, and needs no users and no accumulated history — the first
+  number keel can produce about itself. Exit 1 on any escape.
+  Measured on keel's own repo: **0 escapes in 10 measured trials, 86.8% selectivity** (24 of 182
+  test files run on average). Trials where the suite never noticed the fault are reported separately
+  as `undetected` — a fact about the repo's coverage, excluded from the denominator rather than
+  counted as a keel success.
+
 ## [0.1.2] — 2026-08-02
 
 ### Added
@@ -385,6 +401,7 @@ TypeScript/JavaScript repos.
 - **CI and release pipelines**: build + test on Node 22 and 24; publish to npm on a `v*` tag
   via trusted publishing (OIDC, with provenance).
 
+[Unreleased]: https://github.com/TensorGreed/keel/compare/v0.1.2...HEAD
 [0.1.2]: https://github.com/TensorGreed/keel/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TensorGreed/keel/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TensorGreed/keel/releases/tag/v0.1.0

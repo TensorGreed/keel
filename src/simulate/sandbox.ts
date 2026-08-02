@@ -1176,6 +1176,59 @@ function withPrepareOutput(result: Omit<SandboxResult, "durationMs">, prepared: 
   return { ...result, ...(combined ? { output: combined } : {}) };
 }
 
+export interface JsRunResult {
+  runner: "vitest" | "jest" | "node";
+  status: RunStatus;
+  exitCode: number | null;
+  timedOut: boolean;
+  spawnError?: string;
+  /** structured per-test results, or null when no report was written (a crash before any test ran) */
+  results: { passed: number; failed: number; failures: TestFailure[] } | null;
+  /** combined stdout+stderr, uncapped — the caller decides how much to keep */
+  output: string;
+}
+
+/**
+ * Run JS/TS tests in an EXISTING directory and parse the report. Split out of runSandbox so the
+ * evidence harness (src/evidence/), which manages its own long-lived worktree across many trials,
+ * executes tests through exactly the same path preflight does — a measurement of test selection is
+ * worthless if it measures a different runner than the one selection feeds.
+ *
+ * `reportPath` is where the runner's machine-readable report is written; it must be outside
+ * `worktree` so it can't be mistaken for a source file.
+ */
+export async function runJsTests(
+  worktree: string,
+  reportPath: string,
+  testFiles: string[],
+  timeoutMs: number,
+): Promise<JsRunResult> {
+  const runner = detectRunner(worktree);
+  const [command, args] = runnerCommand(runner, worktree, testFiles, reportPath);
+  const proc = await runProcess(command, args, { cwd: worktree, timeoutMs });
+  const output = `${proc.stdout}\n${proc.stderr}`;
+
+  let results: JsRunResult["results"] = null;
+  try {
+    results =
+      runner === "node"
+        ? nodeTestResults(fs.readFileSync(junitPathFor(reportPath), "utf8"), worktree, testFiles)
+        : parseJestJson(fs.readFileSync(reportPath, "utf8"), worktree, testFiles);
+  } catch {
+    results = null;
+  }
+
+  return {
+    runner,
+    status: proc.code === 0 ? "passed" : "failed",
+    exitCode: proc.code,
+    timedOut: proc.timedOut,
+    ...(proc.spawnError ? { spawnError: proc.spawnError } : {}),
+    results,
+    output,
+  };
+}
+
 export async function runSandbox(repoRoot: string, options: SandboxOptions): Promise<SandboxResult> {
   const started = Date.now();
   const timeoutMs = options.timeoutMs ?? runnerTimeoutMs();
@@ -1272,38 +1325,20 @@ export async function runSandbox(repoRoot: string, options: SandboxOptions): Pro
       return done(withPrepareOutput(await runJavaTest(worktree, ranTests, budgetMs, capped), prepareOutput));
     }
 
-    const runner = detectRunner(worktree);
-    const jsonFile = path.join(parent, "report.json");
-    const [command, args] = runnerCommand(runner, worktree, ranTests, jsonFile);
-    const proc = await runProcess(command, args, { cwd: worktree, timeoutMs: budgetMs });
-
-    const combined = tail(joinOutput(prepareOutput, `${proc.stdout}\n${proc.stderr}`));
-    if (proc.timedOut) {
-      return done({ status: "timed-out", runner, ranTests, timedOut: true, exitCode: proc.code, ...(combined ? { output: combined } : {}), ...(capped ? { capped } : {}) });
+    const js = await runJsTests(worktree, path.join(parent, "report.json"), ranTests, budgetMs);
+    const combined = tail(joinOutput(prepareOutput, js.output));
+    if (js.timedOut) {
+      return done({ status: "timed-out", runner: js.runner, ranTests, timedOut: true, exitCode: js.exitCode, ...(combined ? { output: combined } : {}), ...(capped ? { capped } : {}) });
     }
-    if (proc.spawnError) {
-      return done({ status: "error", runner, ranTests, error: proc.spawnError, ...(combined ? { output: combined } : {}), ...(capped ? { capped } : {}) });
+    if (js.spawnError) {
+      return done({ status: "error", runner: js.runner, ranTests, error: js.spawnError, ...(combined ? { output: combined } : {}), ...(capped ? { capped } : {}) });
     }
-
-    let structured: { passed: number; failed: number; failures: TestFailure[] } | null = null;
-    try {
-      structured =
-        runner === "node"
-          ? nodeTestResults(fs.readFileSync(junitPathFor(jsonFile), "utf8"), worktree, ranTests)
-          : parseJestJson(fs.readFileSync(jsonFile, "utf8"), worktree, ranTests);
-    } catch {
-      structured = null; // no report written (a crash before any test ran) — the output tail stands in
-    }
-
-    const status: RunStatus = proc.code === 0 ? "passed" : "failed";
     return done({
-      status,
-      runner,
+      status: js.status,
+      runner: js.runner,
       ranTests,
-      exitCode: proc.code,
-      ...(structured
-        ? { passed: structured.passed, failed: structured.failed, failures: structured.failures }
-        : {}),
+      exitCode: js.exitCode,
+      ...(js.results ? { passed: js.results.passed, failed: js.results.failed, failures: js.results.failures } : {}),
       ...(combined ? { output: combined } : {}),
       ...(capped ? { capped } : {}),
     });
