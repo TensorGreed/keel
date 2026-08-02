@@ -99,7 +99,9 @@ beforeAll(async () => {
 beforeEach(() => {
   resetGraphCache();
   dir = makeRepo();
-});
+  // git init + two commits is normally instant, but on a loaded CI runner it has exceeded vitest's
+  // default 10s hook timeout. The hook isn't what's under test; give it room.
+}, 60_000);
 afterEach(() => rmDir(dir));
 
 describe("go runner — unavailable path (always)", () => {
@@ -137,7 +139,7 @@ describe.skipIf(!GO)("go runner — executed path (host go)", () => {
     expect(failure!.file).toBe("calc/calc_test.go");
     expect(failure!.graphPath).toEqual(["calc/calc_test.go", "calc/calc.go"]);
     expect(`${failure!.message}\n${failure!.trace ?? ""}`).toContain("want 3");
-  }, 60_000);
+  }, 300_000);
 
   it("passes a benign change", async () => {
     const pf = await preflight(dir, { diff: BENIGN });
@@ -145,7 +147,7 @@ describe.skipIf(!GO)("go runner — executed path (host go)", () => {
     expect(pf.executed.status).toBe("passed");
     expect(pf.executed.passed).toBeGreaterThanOrEqual(2);
     expect(pf.executed.failed).toBe(0);
-  }, 60_000);
+  }, 300_000);
 
   it("surfaces a compile error as an executed failure carrying the compiler output", async () => {
     const pf = await preflight(dir, { diff: COMPILE_BREAK });
@@ -155,7 +157,7 @@ describe.skipIf(!GO)("go runner — executed path (host go)", () => {
     expect(pf.executed.runner).toBe("go");
     const evidence = `${pf.executed.output ?? ""}\n${pf.executed.failures.map((f) => `${f.message}\n${f.trace ?? ""}`).join("\n")}`;
     expect(evidence).toContain("bogus"); // the undefined identifier from the compiler
-  }, 60_000);
+  }, 300_000);
 
   it("reports environment-error (not runner-unavailable) when the toolchain can't be resolved", async () => {
     // go exists, but go.mod demands a version this toolchain can't become under GOTOOLCHAIN=local —
@@ -179,5 +181,5 @@ describe.skipIf(!GO)("go runner — executed path (host go)", () => {
       if (prev === undefined) delete process.env["GOTOOLCHAIN"];
       else process.env["GOTOOLCHAIN"] = prev;
     }
-  }, 60_000);
+  }, 300_000);
 });

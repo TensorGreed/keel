@@ -52,26 +52,42 @@ function branchSafe(text: string): string {
  * it. A hand-shaped diff with a decorative hunk header would look right in a report and fail the
  * moment anyone tried to use it — which is worse than offering no patch at all. When the line can't
  * be located, that's exactly what we do: offer none, and say so.
+ *
+ * The line is matched on the JSON-*encoded* name and spec, not the decoded values. `report.from`
+ * comes back from `JSON.parse`, so a spec containing anything JSON escapes — most obviously a
+ * Windows path, `file:C:\\repo\\dep`, which is stored as `file:C:\\\\repo\\\\dep` — would never be
+ * found by a raw text search, and the upgrade would silently offer no patch. Encoding both sides is
+ * what makes the search correct for any specifier on any platform.
  */
 export function manifestPatch(repoRoot: string, report: UpgradeReport): string {
   if (report.from === null) return ""; // undeclared: there is no line to rewrite
   const to = report.installedVersion ? `^${report.installedVersion}` : report.requested;
 
   let lines: string[];
+  let endsWithNewline: boolean;
   try {
-    lines = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8").split("\n");
+    const raw = fs.readFileSync(path.join(repoRoot, "package.json"), "utf8");
+    lines = raw.split("\n");
+    // Splitting a file that ends with a newline leaves a phantom empty element. Counting it as a
+    // context line inflates the hunk header and `git apply` rejects the whole patch — so drop it and
+    // remember, since a file WITHOUT a trailing newline needs the marker git expects instead.
+    endsWithNewline = lines[lines.length - 1] === "";
+    if (endsWithNewline) lines.pop();
   } catch {
     return "";
   }
 
   // The declaration line: `"pkg": "<current spec>"`, matched on both name and spec so a package
-  // listed in two sections can't be confused for the one that was actually bumped.
-  const needle = new RegExp(`^(\\s*)"${escapeRegExp(report.package)}"\\s*:\\s*"${escapeRegExp(report.from)}"(,?)\\s*$`);
+  // listed in two sections can't be confused for the one that was actually bumped. Both sides are
+  // JSON-encoded first — see the note above about escapes.
+  const key = JSON.stringify(report.package);
+  const fromEncoded = JSON.stringify(report.from);
+  const needle = new RegExp(`^(\\s*)${escapeRegExp(key)}\\s*:\\s*${escapeRegExp(fromEncoded)}(,?)\\s*$`);
   const index = lines.findIndex((l) => needle.test(l));
   if (index < 0) return "";
 
   const match = needle.exec(lines[index]!)!;
-  const replacement = `${match[1]}"${report.package}": "${to}"${match[2]}`;
+  const replacement = `${match[1]}${key}: ${JSON.stringify(to)}${match[2]}`;
 
   // A 3-line context window, clamped to the file, with 1-based line numbers as unified diff wants.
   const start = Math.max(0, index - 3);
@@ -80,15 +96,16 @@ export function manifestPatch(repoRoot: string, report: UpgradeReport): string {
   const after = lines.slice(index + 1, end);
   const count = before.length + 1 + after.length;
 
+  const body = [...before.map((l) => ` ${l}`), `-${lines[index]!}`, `+${replacement}`, ...after.map((l) => ` ${l}`)];
+  // A file with no trailing newline must say so, or git applies a patch that adds one.
+  if (!endsWithNewline && end === lines.length) body.push("\\ No newline at end of file");
+
   return [
     "diff --git a/package.json b/package.json",
     "--- a/package.json",
     "+++ b/package.json",
     `@@ -${start + 1},${count} +${start + 1},${count} @@`,
-    ...before.map((l) => ` ${l}`),
-    `-${lines[index]!}`,
-    `+${replacement}`,
-    ...after.map((l) => ` ${l}`),
+    ...body,
     "",
   ].join("\n");
 }

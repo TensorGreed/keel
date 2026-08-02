@@ -15,6 +15,7 @@
  *     early is the worst thing this command could do.
  */
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SqliteEventStore } from "../src/events/sqlite-store.js";
@@ -218,8 +219,31 @@ describe("PR proposals", () => {
     const patchFile = path.join(fixture.root, "bump.patch");
     fs.writeFileSync(patchFile, patch);
     expect(() => {
-      // eslint-disable-next-line
-      require("node:child_process").execFileSync("git", ["apply", "--check", patchFile], { cwd: dir, stdio: "pipe" });
+      execFileSync("git", ["apply", "--check", patchFile], { cwd: dir, stdio: "pipe" });
+    }).not.toThrow();
+  });
+
+  it("finds a spec containing characters JSON escapes — a Windows path, on any platform", () => {
+    // The failure this pins: `report.from` comes back from JSON.parse, so a Windows `file:` spec
+    // reads as `file:C:\repo\dep` while package.json stores `file:C:\\repo\\dep`. Searching the raw
+    // file text for the decoded value found nothing, and the upgrade silently offered no patch —
+    // reproducible here on every platform, which is where it should have been caught.
+    const windowsSpec = "file:C:\\Users\\RUNNER~1\\registry\\greeter-1.0.0";
+    fs.writeFileSync(
+      path.join(dir, "package.json"),
+      `${JSON.stringify({ name: "fixture", dependencies: { greeter: windowsSpec } }, null, 2)}\n`,
+    );
+    const report = greenReport({ package: "greeter", from: windowsSpec, installedVersion: "2.0.0" });
+
+    const patch = manifestPatch(dir, report);
+    expect(patch, "a JSON-escaped spec must still be located").toContain("diff --git a/package.json");
+    expect(patch).toContain('-    "greeter": "file:C:\\\\Users');
+    expect(patch).toContain('+    "greeter": "^2.0.0"');
+
+    const patchFile = path.join(fixture.root, "win.patch");
+    fs.writeFileSync(patchFile, patch);
+    expect(() => {
+      execFileSync("git", ["apply", "--check", patchFile], { cwd: dir, stdio: "pipe" });
     }).not.toThrow();
   });
 

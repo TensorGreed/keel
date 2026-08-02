@@ -13,6 +13,16 @@ schemas may still change between minor versions. Breaking changes are called out
 
 ### Added
 
+- **The upgrade PR patch was unusable whenever a dependency spec contained a JSON escape.**
+  `manifestPatch` located the declaration line by searching package.json's raw text for
+  `report.from` — but that value comes back from `JSON.parse`, so a Windows `file:` spec read as
+  `file:C:\repo\dep` while the file stores `file:C:\\repo\\dep`. No match, so the batch silently
+  offered no patch and no `git push` command. Both sides are now JSON-encoded before matching, which
+  is correct for any specifier on any platform. Caught by the Windows CI leg; the regression test
+  reproduces it everywhere, and immediately exposed a second bug it now also covers — the phantom
+  empty element from splitting a file that ends in a newline was counted as a context line,
+  inflating the hunk header so `git apply` rejected the patch. A file with no trailing newline now
+  gets git's `\ No newline at end of file` marker.
 - **`keel watch` — the graph pre-warm.** A debounced `fs.watch` (no new dependency) that rebuilds
   the graph in the background as files change, so the cost never lands inside a tool call. The MCP
   server starts it automatically (`KEEL_NO_WATCH=1` to disable); `keel watch` runs it in the

@@ -23,9 +23,19 @@ export { IS_WINDOWS };
  * Recursively delete a temp directory, tolerating Windows' post-exit locks. Always use this in
  * `afterEach` instead of a bare `fs.rmSync`: a lingering lock there is a timing artefact, not a
  * fact about the code under test, and letting it throw fails an otherwise-passing test.
+ *
+ * It does NOT throw. Retries first (Node's own remedy), and if the directory still won't go, warns
+ * and moves on — observed for real on a Windows runner, where a `keel-javaprobe-*` directory was
+ * still locked at teardown and took the whole file down with an EBUSY. Leaving a temp directory
+ * behind in the OS temp folder costs nothing; failing a green test costs a red build and an hour
+ * of somebody's afternoon.
  */
 export function rmDir(dir: string): void {
-  fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+  } catch (err) {
+    process.stderr.write(`[keel-test] could not remove ${dir}: ${(err as Error).message} (ignored — cleanup only)\n`);
+  }
 }
 
 /**
