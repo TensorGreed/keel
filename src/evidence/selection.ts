@@ -32,6 +32,13 @@
  * being classified as noise. If keel claims a change can only affect these tests, every test that
  * fails outside that set counts, whatever the mechanism.
  *
+ * ## Scope
+ *
+ * JS/TS suites only, today: `runJsTests` is the oracle, so a pytest or `go test` repo has nothing
+ * this can measure against. That is a stated limitation rather than a silent one — a run on such a
+ * repo errors out saying so, instead of reporting a selectivity figure computed from a suite it
+ * never executed.
+ *
  * ## How it runs
  *
  * ONE git worktree at HEAD for the whole run, reused across trials — the mutation is written into
@@ -84,7 +91,7 @@ export interface SelectionEvidence {
   repo: string;
   head: string | null;
   seed: number;
-  /** every test file in the graph — the denominator for selectivity */
+  /** test files a runner would actually execute — the denominator for selectivity */
   totalTests: number;
   trials: Trial[];
   summary: {
@@ -140,8 +147,10 @@ export async function measureSelection(
   if (head === null) return { error: "not a git repo (or no HEAD) — the harness measures a commit, so it needs one" };
 
   const { graph } = await loadGraph(root);
-  const allTests = graph.files.filter(isTestFile);
-  if (allTests.length === 0) return { error: "no test files in the graph — there is no suite to measure selection against" };
+  const allTests = graph.files.filter(isRunnableTest);
+  if (allTests.length === 0) {
+    return { error: "no JS/TS test files in the graph — this harness executes JS suites only, so there is nothing here it can use as an oracle" };
+  }
 
   // Candidates: source files that at least one test can reach. A file no test covers can only ever
   // produce an `undetected` trial, so spending a full suite run on it measures nothing.
@@ -258,6 +267,26 @@ async function runTrial(
   } finally {
     fs.writeFileSync(target, original);
   }
+}
+
+/**
+ * Is this a test file a RUNNER would actually execute?
+ *
+ * Deliberately stricter than `isTestFile`, which the graph uses and which also treats anything under
+ * a `test/` directory as test-side code. That is right for selection — a fixture under `test/` is
+ * not production code — but wrong for "the suite": keel's own `test/fixtures/**` holds ~120 Java, Go,
+ * Python and TypeScript files that no runner ever runs. Counting them made the denominator 183
+ * instead of ~65 and OVERSTATED selectivity by about twenty points, which is the exact direction a
+ * measurement must never be wrong in. The suite is what the runner runs, so match on the naming
+ * convention alone.
+ */
+export function isRunnableTest(relPosixPath: string): boolean {
+  if (!isTestFile(relPosixPath)) return false;
+  // JS/TS only, because `runJsTests` is the only suite this harness executes. Counting a repo's Go
+  // or pytest files here would inflate the denominator with tests the run never touches — the same
+  // flattering error as counting fixtures, one layer subtler. Wiring the other runners in would
+  // widen both the numerator and this predicate together; until then the limitation is stated.
+  return /\.(test|spec)\.(c|m)?[jt]sx?$/.test(relPosixPath.split("/").pop() ?? "");
 }
 
 /** Every source file reachable from some test — the only files worth spending a trial on. */

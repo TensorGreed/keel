@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { resetGraphCache } from "../src/graph/cache.js";
 import { initGraphScanners } from "../src/graph/scanners.js";
-import { measureSelection } from "../src/evidence/selection.js";
+import { isRunnableTest, measureSelection } from "../src/evidence/selection.js";
 import { mutate, mutationSites, sequence } from "../src/evidence/mutate.js";
 import { renderSelectionEvidence } from "../src/evidence/report.js";
 import { rmDir } from "./helpers/platform.js";
@@ -114,6 +114,29 @@ describe("mutation generation", () => {
   });
 });
 
+describe("what counts as the suite", () => {
+  it("counts only files a runner would execute, not everything under test/", () => {
+    // The bug this pins: `isTestFile` treats anything under a `test/` directory as test-side code,
+    // which is right for selection and wrong for the denominator. keel's own test/fixtures/** holds
+    // ~120 Java, Go, Python and TS files no runner runs; counting them made the denominator 183
+    // instead of ~65 and overstated selectivity by roughly twenty points — the one direction a
+    // measurement must never be wrong in.
+    expect(isRunnableTest("test/graph.test.ts")).toBe(true);
+    expect(isRunnableTest("src/thing.spec.tsx")).toBe(true);
+
+    // And JS/TS only: runJsTests is the oracle, so counting a repo's Go or pytest files would
+    // inflate the denominator with tests this run never executes.
+    expect(isRunnableTest("pkg/test_thing.py")).toBe(false);
+    expect(isRunnableTest("pkg/thing_test.go")).toBe(false);
+    expect(isRunnableTest("src/test/java/com/x/ThingTest.java")).toBe(false);
+
+    expect(isRunnableTest("test/fixtures/java-spring/src/main/java/com/x/OrderService.java")).toBe(false);
+    expect(isRunnableTest("test/fixtures/mixed/py/main.py")).toBe(false);
+    expect(isRunnableTest("test/helpers/platform.ts")).toBe(false);
+    expect(isRunnableTest("src/graph/dependencies.ts")).toBe(false);
+  });
+});
+
 describe("the harness measures selection", () => {
   it("reports `caught` when every failing test was one keel selected", async () => {
     git(["init", "-b", "main"]);
@@ -184,7 +207,7 @@ describe("the harness measures selection", () => {
     git(["add", "-A"]);
     git(["commit", "-qm", "init"]);
 
-    expect(await measureSelection(dir, { trials: 1 })).toEqual({ error: expect.stringContaining("no test files in the graph") });
+    expect(await measureSelection(dir, { trials: 1 })).toEqual({ error: expect.stringContaining("no JS/TS test files in the graph") });
   }, 120_000);
 
   it("leaves the working tree exactly as it found it", async () => {

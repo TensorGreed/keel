@@ -216,7 +216,7 @@ CI, commits and reverts all answer. **Demo:** a number anyone can reproduce on t
       Reports the escape rate (a failing test keel didn't select — the number that matters) and
       selectivity (the share of the suite skipped — the benefit, worth nothing until escapes are
       zero). Deterministic by seed, runs in a throwaway worktree, needs no users and no accumulated
-      history. On keel itself: **0 escapes in 10 measured trials, 86.8% selectivity.**
+      history. On keel itself: **0 escapes in 11 measured trials, 66.7% selectivity.**
 - [ ] **Claim instrumentation.** A `tool_call` event recording what each MCP tool claimed — which
       tests selected, which failures predicted, which verdict — so real usage can later be scored
       against what actually happened.

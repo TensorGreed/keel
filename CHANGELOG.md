@@ -18,6 +18,12 @@ schemas may still change between minor versions. Breaking changes are called out
   upgrade capped by `--max-tests` looked identical to a complete one: `forbidTruncatedSim` could not
   gate it, and even the plain "skipped N selected test(s)" warning never fired. Found by the
   evidence harness — nothing could detect a change to that field because the field was fiction.
+- **The harness overstated its own headline number.** Selectivity counted every file the graph calls
+  test-side, including keel's ~120 fixture sources under `test/fixtures/**` and the tests of
+  languages this harness cannot execute. The denominator was 182 where the runnable JS suite is 69,
+  which flattered selectivity by roughly twenty points. Corrected to files a JS runner would actually
+  run — and the JS-only scope is now a stated limitation that errors out on a pytest or Go repo,
+  rather than a figure computed from a suite that never ran.
 - **Dead branch in the policy parser.** `maxBlastRadius` was assigned `null` in a branch where it
   already held `null`. Removed. Also found by the harness: mutating the condition changed nothing
   observable, which for a branch is the definition of dead.
@@ -31,7 +37,7 @@ schemas may still change between minor versions. Breaking changes are called out
   (the share of the suite skipped, which is only a benefit while escapes are zero). Deterministic by
   seed, runs in a throwaway git worktree, and needs no users and no accumulated history — the first
   number keel can produce about itself. Exit 1 on any escape.
-  Measured on keel's own repo: **0 escapes in 10 measured trials, 86.8% selectivity** (24 of 182
+  Measured on keel's own repo: **0 escapes in 11 measured trials, 66.7% selectivity** (23 of 69
   test files run on average). Trials where the suite never noticed the fault are reported separately
   as `undetected` — a fact about the repo's coverage, excluded from the denominator rather than
   counted as a keel success.

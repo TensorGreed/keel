@@ -218,7 +218,7 @@ Two numbers come out, and only one of them matters first:
 - **Selectivity** — the share of the suite it skipped. The benefit. Worth nothing unless escapes are
   zero.
 
-On Keel's own repo: **0 escapes in 10 measured trials, 86.8% selectivity** — 24 of 182 test files
+On Keel's own repo: **0 escapes in 11 measured trials, 66.7% selectivity** — 23 of 69 test files
 run on average. Trials where the suite never noticed the fault are reported separately as
 `undetected`; that's a gap in *your* coverage, not a keel success, so it's excluded from the
 denominator rather than quietly counted as a win. Deterministic by seed, runs in a throwaway
