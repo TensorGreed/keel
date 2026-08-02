@@ -148,6 +148,12 @@ export function startGraphWatcher(repoRoot: string, options: WatcherOptions = {}
 
   let watcher: fs.FSWatcher | null = null;
   try {
+    // Check the directory exists BEFORE asking to watch it. `fs.watch` doesn't reliably throw
+    // synchronously for a missing path — on some Linux runners the failure arrives asynchronously on
+    // the error event instead — which would leave `active` claiming a watch we don't have. `active`
+    // has to mean what it says, so one stat buys that guarantee on every platform.
+    if (!fs.statSync(root).isDirectory()) throw new Error(`${root} is not a directory`);
+
     watcher = fs.watch(root, { recursive: true }, (_event, filename) => {
       if (closed) return;
       const rel = typeof filename === "string" ? filename : "";
