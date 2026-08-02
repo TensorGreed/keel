@@ -9,24 +9,7 @@ Keel is pre-1.0: the MCP tool surface and the `keel.policy.json` / `keel.workspa
 schemas may still change between minor versions. Breaking changes are called out under
 **Changed** with a migration note.
 
-## [Unreleased]
-
-### Fixed
-
-- **`keel upgrade` told the policy it had run every test, even when it hadn't.** The verdict was
-  handed a hard-coded `budget: { …, truncated: false }` instead of the run's real budget, so an
-  upgrade capped by `--max-tests` looked identical to a complete one: `forbidTruncatedSim` could not
-  gate it, and even the plain "skipped N selected test(s)" warning never fired. Found by the
-  evidence harness — nothing could detect a change to that field because the field was fiction.
-- **The harness overstated its own headline number.** Selectivity counted every file the graph calls
-  test-side, including keel's ~120 fixture sources under `test/fixtures/**` and the tests of
-  languages this harness cannot execute. The denominator was 182 where the runnable JS suite is 69,
-  which flattered selectivity by roughly twenty points. Corrected to files a JS runner would actually
-  run — and the JS-only scope is now a stated limitation that errors out on a pytest or Go repo,
-  rather than a figure computed from a suite that never ran.
-- **Dead branch in the policy parser.** `maxBlastRadius` was assigned `null` in a branch where it
-  already held `null`. Removed. Also found by the harness: mutating the condition changed nothing
-  observable, which for a branch is the definition of dead.
+## [0.1.3] — 2026-08-02
 
 ### Added
 
@@ -45,6 +28,23 @@ schemas may still change between minor versions. Breaking changes are called out
   that `keel verdict --github-check` depends on, the rule deciding whether to warn about a paid
   mining run before spending anything (extracted as `shouldWarnAboutCost` so it can be tested at
   all), and the distance comparison that picks which link to a decision wins.
+
+### Fixed
+
+- **`keel upgrade` told the policy it had run every test, even when it hadn't.** The verdict was
+  handed a hard-coded `budget: { …, truncated: false }` instead of the run's real budget, so an
+  upgrade capped by `--max-tests` looked identical to a complete one: `forbidTruncatedSim` could not
+  gate it, and even the plain "skipped N selected test(s)" warning never fired. Found by the
+  evidence harness — nothing could detect a change to that field because the field was fiction.
+- **The harness overstated its own headline number.** Selectivity counted every file the graph calls
+  test-side, including keel's ~120 fixture sources under `test/fixtures/**` and the tests of
+  languages this harness cannot execute. The denominator was 182 where the runnable JS suite is 69,
+  which flattered selectivity by roughly twenty points. Corrected to files a JS runner would actually
+  run — and the JS-only scope is now a stated limitation that errors out on a pytest or Go repo,
+  rather than a figure computed from a suite that never ran.
+- **Dead branch in the policy parser.** `maxBlastRadius` was assigned `null` in a branch where it
+  already held `null`. Removed. Also found by the harness: mutating the condition changed nothing
+  observable, which for a branch is the definition of dead.
 
 ## [0.1.2] — 2026-08-02
 
@@ -422,7 +422,7 @@ TypeScript/JavaScript repos.
 - **CI and release pipelines**: build + test on Node 22 and 24; publish to npm on a `v*` tag
   via trusted publishing (OIDC, with provenance).
 
-[Unreleased]: https://github.com/TensorGreed/keel/compare/v0.1.2...HEAD
+[0.1.3]: https://github.com/TensorGreed/keel/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/TensorGreed/keel/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TensorGreed/keel/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TensorGreed/keel/releases/tag/v0.1.0
