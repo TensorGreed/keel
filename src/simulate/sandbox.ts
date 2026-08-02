@@ -383,10 +383,20 @@ export function attributeToRanTest(
   return undefined;
 }
 
-/** Does `trace` reference this repo-relative file, on a path boundary (so `a.js` ≠ `xa.js`)? */
+/**
+ * Does `trace` reference this repo-relative file, on a path boundary (so `a.js` ≠ `xa.js`)?
+ *
+ * Separators are normalized on BOTH sides first. A stack trace on Windows spells the path with
+ * backslashes while every graph key is posix, so matching them raw finds nothing — and since this
+ * fallback is the ONLY attribution route on a Node version whose junit reporter omits the `file`
+ * attribute, that combination silently cost every multi-file failure its file and its graph path.
+ * The recorded Node 22 fixtures didn't catch it because a trace recorded on Linux has no
+ * backslashes in it; the fixtures were right about the reporter and wrong about the platform.
+ */
 function mentionsPath(trace: string, relFile: string): boolean {
+  const normalized = trace.replace(/\\/g, "/");
   const escaped = relFile.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(^|[/\\\\])${escaped}([:)\\s]|$)`).test(trace);
+  return new RegExp(`(^|/)${escaped}([:)\\s]|$)`).test(normalized);
 }
 
 /**

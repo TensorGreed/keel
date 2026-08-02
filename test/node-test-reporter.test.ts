@@ -94,6 +94,19 @@ describe("attributeToRanTest — our own list first, output only when unambiguou
     expect(attributeToRanTest(TWO_FILES, WORKTREE, { trace: `at x (${WORKTREE}/b.test.js:4:1)` })).toBe("b.test.js");
   });
 
+  it("matches a stack that spells paths with backslashes — the Windows shape", () => {
+    // On a Node version whose junit reporter omits `file`, the stack is the ONLY attribution route,
+    // and on Windows it is written with backslashes while every graph key is posix. Reproducible
+    // here because the trace is data, not a platform behaviour.
+    const trace = "at TestContext.<anonymous> (C:\\keel\\wt\\b.test.js:4:32)";
+    expect(attributeToRanTest(TWO_FILES, "C:\\keel\\wt", { trace })).toBe("b.test.js");
+  });
+
+  it("still respects a path boundary after normalizing separators", () => {
+    const trace = "at x (C:\\keel\\wt\\xa.test.js:1:1)";
+    expect(attributeToRanTest(["a.test.js", "other.test.js"], "C:\\keel\\wt", { trace })).toBeUndefined();
+  });
+
   it("refuses to guess when the stack names more than one of them", () => {
     // Two candidates is not a fact. A failure pinned to the wrong file sends a reader — or an
     // agent — to rewrite code that was never involved.
