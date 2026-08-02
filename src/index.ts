@@ -12,6 +12,7 @@
  *   keel report    repo-wide policy reports (--arch)          — see trust/report-cli.ts
  *   keel workspace cross-repo graph over keel.workspace.json  — see workspace/cli.ts
  *   keel upgrade   scope a dependency upgrade + prove what it breaks — see upgrade/cli.ts
+ *   keel watch     keep the graph warm as files change              — see watch/cli.ts
  *
  * Subcommand modules are imported lazily so `keel init` doesn't spin up the MCP SDK,
  * SQLite, or commit ingestion.
@@ -32,6 +33,7 @@ Usage:
   keel report    repo-wide policy reports, e.g. --arch for import-rule violations
   keel workspace one dependency graph across repos (keel.workspace.json)
   keel upgrade   scope a dependency upgrade and prove what it breaks (report only)
+  keel watch     keep the graph warm as files change (the server does this too)
   keel doctor    check the environment is healthy (versions, db, runners, tokens)
   keel --help    show this help
   keel --version print the version
@@ -106,6 +108,11 @@ switch (command) {
   case "upgrade": {
     const { runUpgrade } = await import("./upgrade/cli.js");
     process.exit(await runUpgrade(rest));
+    break;
+  }
+  case "watch": {
+    const { runWatch } = await import("./watch/cli.js");
+    process.exit(await runWatch(rest));
     break;
   }
   case "-h":

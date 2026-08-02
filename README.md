@@ -92,6 +92,7 @@ CLI (offline, deterministic — `keel <cmd>`, or `npx -y @tensorgreed/keel <cmd>
 | `report` | repo-wide `--arch` (import-rule violations) / `--hotspots` (risk ranking) |
 | `workspace` | one dependency graph across repos; `impact` / `deps` across boundaries |
 | `upgrade` | scope a dependency upgrade and prove what it breaks; `--repair` for the agent loop, `--batch` for many, `--scope-only`, `--json` |
+| `watch` | keep the graph warm as files change (the MCP server does this itself) |
 | `doctor` | check the environment is healthy (Node/git, db, a timed graph build, runners, tokens, registration); `--json`, `--no-graph`, exit 1 on red |
 
 ## Quick start
@@ -198,6 +199,34 @@ Each executed entry carries a **PR proposal**: branch, title, a body containing 
 a manifest patch `git apply` accepts, and the commands to open it. Keel composes these and **never
 pushes a branch or opens a PR** — that runs under your credentials against your remote, and it isn't
 keel's to assume.
+
+## Staying warm
+
+The graph is cached on disk and keyed by git HEAD, so a cold start is already cheap — on a
+**24,000-file** four-language repo, loading the whole graph in a fresh process takes **~200ms**. That
+is why Keel has no daemon: a resident process would save a fifth of a second on a repo far larger
+than most, and cost you a lifecycle to manage.
+
+There is one case the cache can't help with. Adding, removing or renaming a file forces a full
+rebuild — 2.4s on that same repo — and it lands *inside* whichever tool call comes next. Since adding
+files is most of what an agent does, Keel watches the repo and does that rebuild in the background
+instead:
+
+| an agent adds a file, then calls a tool | next tool call |
+|---|---|
+| without the watcher | 2321 ms |
+| **with the watcher** | **46 ms** (the 2353 ms rebuild ran in the background) |
+
+The MCP server starts it for you — nothing to configure, `KEEL_NO_WATCH=1` to turn it off. To keep a
+repo warm outside an agent session (before a big `preflight`, or after a pull):
+
+```bash
+keel watch          # foreground; Ctrl-C to stop
+```
+
+No dependency: it's Node's own recursive `fs.watch`, debounced, ignoring everything the graph
+ignores. If a platform can't provide a recursive watch, Keel says so and builds on demand as before —
+`keel doctor` has a row for it.
 
 ## Team memory, shared: `.keel-decisions.jsonl`
 

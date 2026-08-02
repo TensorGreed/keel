@@ -43,6 +43,8 @@ export interface DoctorEnv {
   runners: { name: string; available: boolean }[];
   mcpRegistered: boolean;
   hookInstalled: boolean;
+  /** the pre-warm watcher: whether this platform supports it, and whether it's switched on */
+  watch: { supported: boolean; enabled: boolean };
 }
 
 const MIN_NODE = { major: 22, minor: 13 };
@@ -181,6 +183,31 @@ function graphBuildCheck(env: DoctorEnv): CheckResult {
   return { name: "Graph build", status: "ok", detail };
 }
 
+/**
+ * The graph pre-warm. Not a daemon and not required — a HEAD-keyed cache already loads a 24k-file
+ * graph in ~200ms (see watch/watcher.ts). What it buys is the rebuild a file ADD forces, moved off
+ * the critical path. So an unavailable or disabled watcher is a warning at most, never a failure.
+ */
+function watchCheck(env: DoctorEnv): CheckResult {
+  if (!env.watch.supported) {
+    return {
+      name: "Graph pre-warm",
+      status: "warn",
+      detail: "recursive file watching is unavailable here — the graph is built on demand instead (slower first call after adding a file)",
+      fix: "none needed; nothing is broken, and `keel watch` would report the same",
+    };
+  }
+  if (!env.watch.enabled) {
+    return {
+      name: "Graph pre-warm",
+      status: "warn",
+      detail: "supported, but disabled by KEEL_NO_WATCH=1",
+      fix: "unset KEEL_NO_WATCH to let the server keep the graph warm between tool calls",
+    };
+  }
+  return { name: "Graph pre-warm", status: "ok", detail: "supported and enabled — the server rebuilds the graph in the background as files change" };
+}
+
 function ollamaCheck(env: DoctorEnv): CheckResult {
   if (!env.ollama.reachable) {
     return {
@@ -271,6 +298,7 @@ export function runDoctorChecks(env: DoctorEnv): CheckResult[] {
     dbCheck(env),
     cacheCheck(env),
     graphBuildCheck(env),
+    watchCheck(env),
     ollamaCheck(env),
     githubCheck(env),
     runnersCheck(env),

@@ -195,10 +195,15 @@ no mining, no model, no waiting.
       mines, commits the file, and every clone thereafter has the memory with no model call and no
       network. Local human records win over the file, the file wins over nothing, and a suppression
       in the file suppresses everywhere. Embeddings stay local and lazy — vectors don't belong in git.
-- [ ] **Ambient warmth (`keel watch`).** Keep the substrate ready before it's asked: watch the repo
-      and maintain the incremental graph as files change, so no tool call ever pays for a rebuild.
-      Measure first — if the HEAD-keyed cache already makes cold start negligible, ship the
-      pre-warm and say why a daemon isn't warranted.
+- [x] **Ambient warmth (`keel watch`).** Measured first, on the 24k-file synthetic repo: with a warm
+      HEAD-keyed cache a cold start loads the graph in **~200ms**, so a resident daemon would save a
+      fifth of a second on a repo far larger than most — not worth its lifecycle, staleness and IPC.
+      **No daemon.** What the numbers did show is that a file ADD forces a full rebuild (2.4s) which
+      lands inside the next tool call, and that is what shipped: a debounced `fs.watch` pre-warm (no
+      new deps) that moves the rebuild off the critical path — measured 2321ms → **46ms** for the
+      next tool call after an agent adds a file. The MCP server runs it automatically
+      (`KEEL_NO_WATCH=1` to disable); `keel watch` runs it in the foreground outside a session, and
+      `keel doctor` reports whether it's supported and enabled.
 
 ## Later
 

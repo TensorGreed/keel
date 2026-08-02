@@ -22,6 +22,7 @@ function baseEnv(over: Partial<DoctorEnv> = {}): DoctorEnv {
     db: { state: "ok", counts: { commits: 10, prs: 2, decisions: 3 } },
     cache: { state: "fresh", head: "abc1234def5678" },
     graphBuild: { state: "measured", files: 1200, edges: 3400, ms: 400 },
+    watch: { supported: true, enabled: true },
     ollama: { reachable: true, models: ["nomic-embed-text:latest", "llama3.2:latest"], required: ["nomic-embed-text", "llama3.2"] },
     github: { state: "valid", remaining: 4999, limit: 5000 },
     runners: [

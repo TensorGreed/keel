@@ -66,6 +66,20 @@ export async function serve(
     console.error(`[keel] graph warm-up failed: ${(err as Error).message}`);
   }
 
+  // Keep it warm. A full rebuild costs seconds on a large repo and the cache forces one whenever a
+  // file is added, removed or renamed — which is what an agent does constantly. Watching moves that
+  // cost off the critical path: it happens moments after the edit instead of inside the next tool
+  // call. Best-effort and opt-out; see watch/watcher.ts for why this is a watcher, not a daemon.
+  if (process.env["KEEL_NO_WATCH"] !== "1") {
+    const { startGraphWatcher } = await import("./watch/watcher.js");
+    const watcher = startGraphWatcher(repoRoot, {
+      onRefresh: (event) => console.error(`[keel] graph refreshed (${event.source}): ${event.files} files in ${event.durationMs}ms`),
+      onError: (message) => console.error(`[keel] ${message}`),
+    });
+    if (watcher.active) console.error("[keel] watching for changes to keep the graph warm (KEEL_NO_WATCH=1 to disable)");
+    for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => watcher.close());
+  }
+
   const server = new McpServer({ name: "keel", version: "0.0.1" });
   registerTools(server, repoRoot, store);
 

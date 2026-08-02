@@ -13,6 +13,17 @@ schemas may still change between minor versions. Breaking changes are called out
 
 ### Added
 
+- **`keel watch` — the graph pre-warm.** A debounced `fs.watch` (no new dependency) that rebuilds
+  the graph in the background as files change, so the cost never lands inside a tool call. The MCP
+  server starts it automatically (`KEEL_NO_WATCH=1` to disable); `keel watch` runs it in the
+  foreground outside a session; `keel doctor` reports whether it's supported and enabled.
+  **This is deliberately not a daemon.** Measured first on the 24k-file four-language repo: with a
+  warm HEAD-keyed cache a cold start loads the whole graph in ~200ms, so a resident process would
+  save a fifth of a second on a repo far larger than most — not worth its lifecycle and staleness.
+  What the measurements *did* show is that adding a file forces a full rebuild (2.4s) that lands in
+  the next tool call. Watching moves it: **2321ms → 46ms** for the next call after an agent adds a
+  file. Correctness is unchanged — the watcher calls the same `loadGraph` any tool call would, and
+  the tests assert the same incremental-equals-full guarantee the cache carries.
 - **Decisions as code: `.keel-decisions.jsonl`.** `keel mine`, `keel ingest`, and
   `keel decision add/reject` now maintain a committed, reviewable export of the decision index at
   the repo root — one JSON record per line, sorted by id, byte-identical for a given database so the

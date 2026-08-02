@@ -53,8 +53,14 @@ The server takes the target repo path from the `KEEL_REPO` env var (defaults to 
 ```
 src/
   index.ts          CLI entry: dispatches serve (default), init, ingest, mine, decision,
-                    verdict, report, prompt-context, doctor, upgrade
-  serve.ts          Starts the MCP server over stdio; ingests commits first
+                    verdict, report, prompt-context, doctor, upgrade, watch
+  serve.ts          Starts the MCP server over stdio; loads .keel-decisions.jsonl into the index,
+                    ingests commits, warms the graph, and starts the pre-warm watcher
+  watch/            `keel watch`: watcher.ts (debounced fs.watch, no deps; refreshes the graph in the
+                    background so a rebuild never lands inside a tool call — MEASURED 2321ms -> 46ms
+                    for the next call after a file add; the module header says why this is a watcher
+                    and not a daemon) + cli.ts (foreground). The server starts it itself unless
+                    KEEL_NO_WATCH=1; doctor reports support + enablement
   doctor/           `keel doctor`: doctor.ts (pure checks over a gathered DoctorEnv → ok/warn/fail
                     with one named fix each), cli.ts (defensive real-env probes; table + --json,
                     exit 1 on red). Bounded probes via util/timeouts (2s GitHub/Ollama leash); one
@@ -131,7 +137,10 @@ src/
                     (Haiku), or any OpenAI-compatible endpoint (KEEL_OPENAI_BASE_URL → DeepSeek/
                     Groq/vLLM/…); injectable DecisionModel; never reached from the MCP server.
                     Cloud runs > 25 PRs print a cost estimate first; local stays the default.
-  retrieval/        Decision index: embed.ts (local embeddings, injectable),
+  retrieval/        Decision index: decisions-file.ts (.keel-decisions.jsonl — the COMMITTED export:
+                    deterministic serialize/parse, import fills gaps only, suppression is absolute,
+                    embeddings deliberately excluded) + decisions-export.ts (the one writer, used by
+                    mine/ingest/decision), embed.ts (local embeddings, injectable),
                     index.ts (retrieve by graph node or meaning), why.ts (the `why` tool's
                     composition — file links + semantic/keyword, human overrides, receipts),
                     prompt-context.ts + prompt-context-cli.ts (`keel prompt-context`: a Claude Code

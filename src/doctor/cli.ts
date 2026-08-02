@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { FetchGitHubClient } from "../github/client.js";
 import { GitHubError } from "../github/client.js";
 import { isBatchFile, resolveOnPath } from "../util/platform.js";
+import { recursiveWatchSupported } from "../watch/watcher.js";
 import { execFileTimed } from "../util/timeouts.js";
 import { doctorExitCode, renderDoctorTable, runDoctorChecks, type DoctorEnv } from "./doctor.js";
 
@@ -19,9 +20,9 @@ Usage: keel doctor [--json] [--no-graph]
   --json       emit the full report as JSON instead of a table
   --no-graph   skip the timed graph build (the one probe whose cost scales with the repo)
 
-Probes Node/git versions, the repo, the event db, the graph cache, a timed cold graph build, Ollama
-+ required models, GITHUB_TOKEN validity, available test runners, and the .mcp.json / hook
-registration. Each failing line names a fix. Exit code: 1 if anything is red (a hard failure), else
+Probes Node/git versions, the repo, the event db, the graph cache, a timed cold graph build, the
+graph pre-warm watcher, Ollama + required models, GITHUB_TOKEN validity, available test runners, and
+the .mcp.json / hook registration. Each failing line names a fix. Exit code: 1 if anything is red (a hard failure), else
 0. Reads KEEL_REPO or cwd.`;
 
 const PROBE_TIMEOUT_MS = 2_000; // doctor stays snappy; a slow probe is itself a finding
@@ -188,6 +189,7 @@ export async function gatherDoctorEnv(root: string, options: { skipGraph?: boole
       { name: "gradle", available: gradle },
     ],
     graphBuild: await probeGraphBuild(root, isRepo, options.skipGraph ?? false),
+    watch: { supported: recursiveWatchSupported(root), enabled: process.env["KEEL_NO_WATCH"] !== "1" },
     mcpRegistered: probeMcp(root),
     hookInstalled: probeHook(root),
   };
