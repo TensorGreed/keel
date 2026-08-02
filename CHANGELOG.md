@@ -9,7 +9,7 @@ Keel is pre-1.0: the MCP tool surface and the `keel.policy.json` / `keel.workspa
 schemas may still change between minor versions. Breaking changes are called out under
 **Changed** with a migration note.
 
-## [Unreleased]
+## [0.1.2] — 2026-08-02
 
 ### Added
 
@@ -385,6 +385,6 @@ TypeScript/JavaScript repos.
 - **CI and release pipelines**: build + test on Node 22 and 24; publish to npm on a `v*` tag
   via trusted publishing (OIDC, with provenance).
 
-[Unreleased]: https://github.com/TensorGreed/keel/compare/v0.1.1...HEAD
+[0.1.2]: https://github.com/TensorGreed/keel/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/TensorGreed/keel/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/TensorGreed/keel/releases/tag/v0.1.0
