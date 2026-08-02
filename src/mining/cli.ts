@@ -40,6 +40,21 @@ to populate PR threads. Safe to re-run — already-mined/embedded records are sk
 const CLOUD_PROVIDERS = new Set(["anthropic", "openai"]);
 /** Warn before a cloud run larger than this, so a bill is never a surprise (CLAUDE.md cost rules). */
 const CLOUD_WARN_THRESHOLD = 25;
+
+/**
+ * Should a run announce its likely cost before spending anything? Only a PAID backend past the
+ * threshold — local Ollama costs nothing, so warning about it would train people to ignore the
+ * warning that matters. Pulled out of the callback so the rule that stands between a user and a
+ * surprise bill is testable; the evidence harness found that mutating it changed nothing observable.
+ */
+export function shouldWarnAboutCost(isCloud: boolean, prCount: number): boolean {
+  return isCloud && prCount > CLOUD_WARN_THRESHOLD;
+}
+
+/** The rough token estimate shown with that warning. */
+export function estimateTokens(prCount: number): number {
+  return prCount * EST_TOKENS_PER_PR;
+}
 /** Very rough tokens per PR (prompt thread + JSON response) for the pre-run cost estimate. */
 const EST_TOKENS_PER_PR = 2000;
 
@@ -124,8 +139,8 @@ export async function runMine(argv: string[]): Promise<number> {
       // Cost guard: before the first paid API call of a large cloud run, print the size + a rough
       // token estimate to stderr, so nobody discovers a bill by surprise.
       onPlan: (count) => {
-        if (isCloud && count > CLOUD_WARN_THRESHOLD) {
-          const tokens = (count * EST_TOKENS_PER_PR).toLocaleString();
+        if (shouldWarnAboutCost(isCloud, count)) {
+          const tokens = estimateTokens(count).toLocaleString();
           warn(`about to mine ${count} PR(s) via ${model.name} (a paid API) — rough estimate ~${tokens} tokens; Ctrl-C now to abort`);
         }
       },

@@ -247,7 +247,7 @@ function assemble(
     memory,
     reportOnly: REPORT_ONLY_NOTICE,
     scopeOnly: parts.scopeOnly,
-    verdict: judge(repoRoot, scope, memory, parts),
+    verdict: judge(repoRoot, scope, memory, budget, parts),
     budget,
   };
 }
@@ -266,6 +266,7 @@ function judge(
   repoRoot: string,
   scope: UpgradeScope,
   memory: UpgradeMemory,
+  budget: UpgradeReport["budget"],
   parts: AssembleParts,
 ): { verdict: VerdictLevel; reasons: VerdictReason[] } {
   const loaded = loadPolicy(repoRoot);
@@ -305,7 +306,11 @@ function judge(
         failed: simFailures.length,
         failures: simFailures,
         ...(parts.executed.error ? { error: parts.executed.error } : {}),
-        budget: { maxTests: 0, maxSeconds: 0, testsSkipped: [], truncated: false },
+        // The REAL budget, not a placeholder. A zeroed one told the policy this run never skipped a
+        // test, so `forbidTruncatedSim` could not gate an upgrade and the plain truncation warning
+        // never fired — a capped run looked exactly like a complete one. Found by the evidence
+        // harness: nothing could detect a change to the field because the field was fiction.
+        budget,
       },
       uncoveredChanges: scope.uncoveredSurface,
       testsSelected: scope.testsSelected,

@@ -219,6 +219,33 @@ describe.skipIf(!NPM_ON_PATH || IS_WINDOWS)("upgrade break discovery (real insta
     expect(report.verdict.verdict).not.toBe("pass");
   }, 180_000);
 
+  it("tells the POLICY it truncated, not just the reader", async () => {
+    // The bug this pins: the verdict was handed a hard-coded `truncated: false`, so a capped run
+    // looked identical to a complete one — `forbidTruncatedSim` could not gate an upgrade, and even
+    // the plain warning never fired. Found by the evidence harness, which noticed nothing could
+    // detect a change to a field that was fiction.
+    fs.writeFileSync(path.join(dir, "keel.policy.json"), JSON.stringify({ version: 1, forbidTruncatedSim: true }, null, 2));
+    const report = await offline(() =>
+      runUpgradeAnalysis(dir, fixture.target("1.0.0"), { maxTests: 0, maxSeconds: 120 }),
+    );
+    if ("error" in report) throw new Error(report.error);
+
+    expect(report.budget.truncated).toBe(true);
+    const reason = report.verdict.reasons.find((r) => r.rule === "forbidTruncatedSim");
+    expect(reason, `reasons: ${JSON.stringify(report.verdict.reasons)}`).toBeDefined();
+    expect(reason!.outcome).toBe("block");
+    expect(reason!.detail).toContain("skipped 1 selected test(s)");
+    expect(report.verdict.verdict).toBe("block");
+  }, 180_000);
+
+  it("warns about truncation even when no policy asks it to", async () => {
+    const report = await offline(() =>
+      runUpgradeAnalysis(dir, fixture.target("1.0.0"), { maxTests: 0, maxSeconds: 120 }),
+    );
+    if ("error" in report) throw new Error(report.error);
+    expect(report.verdict.reasons.some((r) => r.outcome === "warn" && r.detail.includes("skipped 1 selected test(s)"))).toBe(true);
+  }, 180_000);
+
   it("honors and reports the test budget", async () => {
     const report = await offline(() =>
       runUpgradeAnalysis(dir, fixture.target("1.0.0"), { maxTests: 0, maxSeconds: 120 }),

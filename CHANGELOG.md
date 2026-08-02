@@ -11,6 +11,17 @@ schemas may still change between minor versions. Breaking changes are called out
 
 ## [Unreleased]
 
+### Fixed
+
+- **`keel upgrade` told the policy it had run every test, even when it hadn't.** The verdict was
+  handed a hard-coded `budget: { …, truncated: false }` instead of the run's real budget, so an
+  upgrade capped by `--max-tests` looked identical to a complete one: `forbidTruncatedSim` could not
+  gate it, and even the plain "skipped N selected test(s)" warning never fired. Found by the
+  evidence harness — nothing could detect a change to that field because the field was fiction.
+- **Dead branch in the policy parser.** `maxBlastRadius` was assigned `null` in a branch where it
+  already held `null`. Removed. Also found by the harness: mutating the condition changed nothing
+  observable, which for a branch is the definition of dead.
+
 ### Added
 
 - **`keel evidence` — measure whether test selection actually catches what breaks.** Fault
@@ -24,6 +35,10 @@ schemas may still change between minor versions. Breaking changes are called out
   test files run on average). Trials where the suite never noticed the fault are reported separately
   as `undetected` — a fact about the repo's coverage, excluded from the denominator rather than
   counted as a keel success.
+- **Tests for three things the harness proved nothing was watching**: the POST body and content type
+  that `keel verdict --github-check` depends on, the rule deciding whether to warn about a paid
+  mining run before spending anything (extracted as `shouldWarnAboutCost` so it can be tested at
+  all), and the distance comparison that picks which link to a decision wins.
 
 ## [0.1.2] — 2026-08-02
 

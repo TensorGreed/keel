@@ -125,9 +125,10 @@ export function parsePolicy(data: unknown): Policy | { error: string } {
       return { error: '"maxBlastRadius" must be a non-negative number or null' };
     }
     maxBlastRadius = n;
-  } else if (data["maxBlastRadius"] === null) {
-    maxBlastRadius = null;
   }
+  // No `else if (… === null)` branch: maxBlastRadius already starts at the default, which IS null,
+  // so assigning null there was a no-op. The evidence harness found it — mutating the condition
+  // changed nothing observable, which for a branch is the definition of dead.
 
   const protectedPaths: ProtectedPath[] = [];
   if (data["protectedPaths"] !== undefined) {
