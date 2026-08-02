@@ -181,6 +181,25 @@ broken.
       and the commands to open it. Keel composes those and does NOT push branches or open PRs:
       pushing under someone's credentials isn't keel's to assume.
 
+## Phase 7 — Team & ambient
+
+Goal: the substrate stops being one person's local setup. Memory becomes a reviewable artifact the
+whole team and every agent shares, and keel is warm before anyone asks it anything.
+**Demo:** clone a repo, open Claude Code, and the agent already knows why the code is the way it is —
+no mining, no model, no waiting.
+
+- [x] **Decisions as code.** `keel mine`, `keel ingest`, and `keel decision add/reject` maintain
+      `.keel-decisions.jsonl` at the repo root — a committed, reviewable, one-record-per-line export
+      of the decision index (deterministic ordering and stable formatting, so the diff is the
+      change). Keel loads it into the local index on startup when records are missing: one person
+      mines, commits the file, and every clone thereafter has the memory with no model call and no
+      network. Local human records win over the file, the file wins over nothing, and a suppression
+      in the file suppresses everywhere. Embeddings stay local and lazy — vectors don't belong in git.
+- [ ] **Ambient warmth (`keel watch`).** Keep the substrate ready before it's asked: watch the repo
+      and maintain the incremental graph as files change, so no tool call ever pays for a rebuild.
+      Measure first — if the HEAD-keyed cache already makes cold start negligible, ship the
+      pre-warm and say why a daemon isn't warranted.
+
 ## Later
 
 Team deployment, policy sharing, incident + Jira connectors, service-level graphs.

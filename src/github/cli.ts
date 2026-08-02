@@ -5,6 +5,7 @@
  */
 import * as path from "node:path";
 import { ingestAdrs } from "../adr/ingest.js";
+import { writeDecisionExport } from "../retrieval/decisions-export.js";
 import { loadGraph } from "../graph/cache.js";
 import { embedDecisions, OllamaEmbeddingModel } from "../retrieval/embed.js";
 import { SqliteEventStore } from "../events/sqlite-store.js";
@@ -82,6 +83,7 @@ export async function runIngest(argv: string[]): Promise<number> {
     const ref = await resolveRepoRef(repoRoot, repoOverride);
     if ("error" in ref) {
       warn(`skipping GitHub ingest (${ref.error}); ADRs ingested locally`);
+      await writeDecisionExport(store, repoRoot);
       return 0;
     }
     const token = process.env["GITHUB_TOKEN"];
@@ -110,6 +112,7 @@ export async function runIngest(argv: string[]): Promise<number> {
     if (result.stopped === "timeout") {
       warn(`a GitHub request timed out (raise KEEL_HTTP_TIMEOUT if your network is slow); progress saved, resume by re-running`);
     }
+    await writeDecisionExport(store, repoRoot);
     return 0;
   } finally {
     store.close();

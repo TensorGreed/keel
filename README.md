@@ -199,6 +199,45 @@ a manifest patch `git apply` accepts, and the commands to open it. Keel composes
 pushes a branch or opens a PR** — that runs under your credentials against your remote, and it isn't
 keel's to assume.
 
+## Team memory, shared: `.keel-decisions.jsonl`
+
+Mining is the expensive part, and until now it was also the private part — the memory lived in a
+gitignored `.keel/events.db`, so the person who mined the repo had it and nobody else did. Every
+clone, every CI runner, and every teammate's agent started from zero.
+
+**One person mines. They commit one file. Everyone gets the memory.**
+
+```bash
+keel ingest && keel mine        # once, by one person — writes .keel-decisions.jsonl
+git add .keel-decisions.jsonl && git commit -m "chore: keel decision index"
+```
+
+From then on, every clone loads it on the first `keel serve` — no mining, no model call, no network.
+The file sits at the repo root (deliberately *not* inside gitignored `.keel/`), one JSON record per
+line, sorted by id:
+
+```jsonl
+{"external_id":"decision:pr:812","origin":"mined","summary":"Hold the codec at 4.x","rationale":"5.x re-encodes on upload…","alternatives":[],"confidence":"high","files":["src/upload.ts"],"source":{"pr":812,"url":"https://github.com/acme/app/pull/812","adr":null,"author":"kim","date":"2026-03-02T10:11:12Z"},"suppressed":false}
+```
+
+It is meant to be **read in a pull request**. One record per line means a new decision is a one-line
+diff; sorted ids mean the diff shows what changed rather than what moved; the same database always
+exports byte-identical bytes, so the file never churns. A bad mined record can be fixed by editing a
+line — no pipeline re-run.
+
+- **`keel decision add`** pins a human decision and updates the file. **`keel decision reject`**
+  suppresses one — and because the rejection is in the file, it suppresses on every teammate's clone
+  too. A rejected decision never comes back.
+- **Conflict rule:** a local human record wins over the file, the file wins over nothing. Import only
+  fills gaps; it never overwrites or deletes what you have.
+- **Embeddings stay local.** They're recomputed lazily per machine — vectors are large, opaque, and
+  model-specific, and would turn a reviewable text file into a blob nobody reads. Until a machine
+  embeds, retrieval falls back to keyword matching, which is Keel's documented degradation
+  everywhere else.
+
+If your `.gitignore` has a broad `.keel*` rule, narrow it to `.keel/` — the export is meant to be
+committed.
+
 ## Mining decisions — model providers
 
 `keel mine` extracts the "why" from ingested PR threads. It is the **only** part of Keel that calls a

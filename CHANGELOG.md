@@ -13,6 +13,18 @@ schemas may still change between minor versions. Breaking changes are called out
 
 ### Added
 
+- **Decisions as code: `.keel-decisions.jsonl`.** `keel mine`, `keel ingest`, and
+  `keel decision add/reject` now maintain a committed, reviewable export of the decision index at
+  the repo root — one JSON record per line, sorted by id, byte-identical for a given database so the
+  file never churns and its diff is readable in a pull request. Keel loads it into the local index on
+  server startup (and in the prompt-context hook) when records are missing, so **one person mines,
+  commits the file, and every clone thereafter has the team's memory** — no model call, no network,
+  no waiting. Local human records win over the file, the file wins over nothing, and a suppression in
+  the file suppresses everywhere: a rejected decision can't come back to life on a teammate's clone.
+  Malformed lines are skipped with a line-numbered warning rather than failing the command.
+  Embeddings are deliberately **not** exported — they're recomputed lazily per machine, since vectors
+  are large, opaque and model-specific, and would turn a reviewable text file into a blob.
+
 - **`keel upgrade` — dependency upgrades with proof (Phase 0, report only).**
   `keel upgrade <pkg>@<version|latest>` and the `upgrade_scope` MCP tool, over one core in
   `src/upgrade/`. It **scopes** the upgrade from the graph — every file importing the package (the

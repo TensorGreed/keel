@@ -14,6 +14,7 @@ import { registerTools } from "./mcp/tools.js";
 import { loadGraph } from "./graph/cache.js";
 import { SqliteEventStore } from "./events/sqlite-store.js";
 import { ingestCommits } from "./events/ingest.js";
+import { DECISIONS_FILE, importDecisions } from "./retrieval/decisions-file.js";
 
 export async function serve(
   repoRoot = path.resolve(process.env["KEEL_REPO"] ?? process.cwd()),
@@ -24,6 +25,23 @@ export async function serve(
   }
 
   const store = new SqliteEventStore(path.join(repoRoot, ".keel", "events.db"));
+
+  // Decisions as code, before anything can read the index: a fresh clone has `.keel-decisions.jsonl`
+  // from git but an empty `.keel/events.db`, and this is what turns the first into the second — no
+  // mining, no model, no network. Cheap and idempotent (one stat() when nothing changed).
+  try {
+    const loaded = await importDecisions(store, repoRoot);
+    for (const warning of loaded.warnings) console.error(`[keel] ${warning}`);
+    if (loaded.imported > 0 || loaded.suppressed > 0) {
+      console.error(
+        `[keel] loaded ${loaded.imported} decision(s) from ${DECISIONS_FILE}` +
+          `${loaded.suppressed > 0 ? ` (${loaded.suppressed} suppressed)` : ""} — team memory without mining`,
+      );
+    }
+  } catch (err) {
+    console.error(`[keel] could not load ${DECISIONS_FILE}: ${(err as Error).message}`);
+  }
+
   try {
     await ingestCommits(store, repoRoot);
   } catch (err) {

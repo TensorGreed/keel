@@ -11,6 +11,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
+import { importDecisions } from "./decisions-file.js";
 import { OllamaEmbeddingModel } from "./embed.js";
 import { buildHookOutput, matchPromptDecisions, parseHookPrompt, renderAdditionalContext } from "./prompt-context.js";
 
@@ -58,6 +59,9 @@ export async function runPromptContext(argv: string[]): Promise<number> {
   let store: SqliteEventStore | undefined;
   try {
     store = new SqliteEventStore(dbPath);
+    // Pick up decisions a teammate committed since this db was last touched. One stat() when the
+    // file hasn't changed, which is every prompt but the first after a pull.
+    await importDecisions(store, repoRoot);
     const embedModel = new OllamaEmbeddingModel(
       process.env["KEEL_EMBED_MODEL"],
       process.env["KEEL_OLLAMA_URL"],

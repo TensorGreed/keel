@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { SqliteEventStore } from "../events/sqlite-store.js";
 import type { KeelEvent } from "../events/store.js";
 import { embedDecisions, OllamaEmbeddingModel } from "../retrieval/embed.js";
+import { writeDecisionExport } from "../retrieval/decisions-export.js";
 
 const DECISION_HELP = `keel decision — record human decisions and overrides
 
@@ -128,6 +129,7 @@ async function runAdd(store: SqliteEventStore, repoRoot: string, argv: string[])
   if (embedResult.error) warn(`(not embedded: ${embedResult.error} — 'keel mine' will pick it up later)`);
 
   console.log(`[keel] added human decision ${id}${files.length ? ` linked to ${files.join(", ")}` : ""}`);
+  await writeDecisionExport(store, repoRoot);
   return 0;
 }
 
@@ -150,6 +152,8 @@ export async function runDecision(argv: string[]): Promise<number> {
       }
       store.suppressDecision(id);
       console.log(`[keel] rejected decision ${id} (kept in the log, excluded from why)`);
+      // The rejection has to travel: an unexported suppression comes back on every teammate's clone.
+      await writeDecisionExport(store, repoRoot);
       return 0;
     }
     warn(`decision: unknown subcommand "${sub}" (use add or reject)`);

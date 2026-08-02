@@ -8,6 +8,7 @@ import { SqliteEventStore } from "../events/sqlite-store.js";
 import { mineDecisions } from "./mine.js";
 import { AnthropicModel, OllamaModel, OpenAICompatibleModel, type DecisionModel } from "./model.js";
 import { embedDecisions, OllamaEmbeddingModel } from "../retrieval/embed.js";
+import { writeDecisionExport } from "../retrieval/decisions-export.js";
 
 const MINE_HELP = `keel mine — extract decision records from ingested PR threads
 
@@ -151,6 +152,10 @@ export async function runMine(argv: string[]): Promise<number> {
         );
       }
     }
+    // Decisions as code: keep the committed export in step, so `keel mine` + `git add` is all it
+    // takes for the whole team (and every agent) to have this memory.
+    await writeDecisionExport(store, repoRoot);
+
     return result.errors > 0 && result.mined === 0 ? 1 : 0;
   } finally {
     store.close();
